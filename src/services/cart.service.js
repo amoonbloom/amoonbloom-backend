@@ -117,6 +117,28 @@ async function updateCartMessage(userId, orderMessage) {
   return getOrCreateCart(userId);
 }
 
+/**
+ * Update the per-item message (e.g. gift note, engraving) for a product in the cart.
+ * @param {string} userId - Authenticated user ID
+ * @param {{ productId: string, message: string | null }} payload
+ * @returns {{ cart: object | null, error: string | null }}
+ */
+async function updateItemMessage(userId, { productId, message }) {
+  const cart = await getOrCreateCart(userId);
+  const item = await prisma.cartItem.findUnique({
+    where: {
+      cartId_productId: { cartId: cart.id, productId },
+    },
+  });
+  if (!item) return { cart: null, error: 'Product not in cart' };
+  const newMessage = message !== undefined && message !== null ? (String(message).trim() || null) : item.message;
+  await prisma.cartItem.update({
+    where: { id: item.id },
+    data: { message: newMessage },
+  });
+  return { cart: await getOrCreateCart(userId), error: null };
+}
+
 async function getCart(userId) {
   const cart = await getOrCreateCart(userId);
   const items = cart.items.map((i) => ({
@@ -150,6 +172,7 @@ module.exports = {
   getOrCreateCart,
   addToCart,
   updateQuantity,
+  updateItemMessage,
   removeFromCart,
   updateCartMessage,
   getCart,

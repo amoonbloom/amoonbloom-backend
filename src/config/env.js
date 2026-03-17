@@ -14,6 +14,7 @@ const optional = [
   'HOST',
   'ALLOWED_ORIGINS',
   'GOOGLE_CLIENT_ID',
+  'APPLE_CLIENT_ID',
   'JWT_EXPIRES_IN',
   'FRONTEND_URL',
   'FROM_EMAIL',

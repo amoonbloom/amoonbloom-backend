@@ -30,6 +30,7 @@ process.on('unhandledRejection', (reason, promise) => {
 // Routes
 const authRoutes = require('./src/routes/auth.routes');
 const userRoutes = require('./src/routes/user.routes');
+const userProfileRoutes = require('./src/routes/userProfile.routes');
 const contactRoutes = require('./src/routes/contact.routes');
 const settingsRoutes = require('./src/routes/settings.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
@@ -82,6 +83,7 @@ app.get('/', (req, res) => {
 
 // Mount v1 routes
 v1Router.use('/auth', authRoutes);
+v1Router.use('/user', userProfileRoutes);
 v1Router.use('/users', userRoutes);
 v1Router.use('/contact', contactRoutes);
 v1Router.use('/settings', settingsRoutes);
@@ -95,6 +97,7 @@ app.use('/api/v1', v1Router);
 
 // Legacy /api/* for backward compatibility (same handlers)
 app.use('/api/auth', authRoutes);
+app.use('/api/user', userProfileRoutes);
 app.use('/api/users', userRoutes);
 app.use('/api/contact', contactRoutes);
 app.use('/api/settings', settingsRoutes);

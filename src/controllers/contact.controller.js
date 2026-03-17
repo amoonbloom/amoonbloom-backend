@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const prisma = require('../config/db');
+const { success, error } = require('../utils/response');
 
 // Helper: Send email (non-blocking — caller should catch errors)
 const sendEmail = async (to, subject, html) => {
@@ -43,10 +44,7 @@ const submitContact = async (req, res, next) => {
     const { firstName, lastName, email, phone, subject, message } = req.body;
 
     if (!firstName || !email || !message) {
-      return res.status(400).json({
-        success: false,
-        message: 'First name, email, and message are required',
-      });
+      return error(res, 'First name, email, and message are required', 400);
     }
 
     // Save to database first (this is the source of truth)
@@ -130,12 +128,9 @@ const submitContact = async (req, res, next) => {
       console.warn('[CONTACT] Email notification failed (message saved to DB):', emailError.message);
     }
 
-    res.status(200).json({
-      success: true,
-      message: 'Message sent successfully. We will get back to you soon!',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'Message sent successfully. We will get back to you soon!', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -179,21 +174,17 @@ const getAllMessages = async (req, res, next) => {
     ]);
 
     const totalPages = Math.ceil(total / take);
-
-    res.status(200).json({
-      success: true,
-      data: messages,
-      pagination: {
-        page: parseInt(page),
-        limit: take,
-        total,
-        totalPages,
-        hasNext: parseInt(page) < totalPages,
-        hasPrev: parseInt(page) > 1,
-      },
-    });
-  } catch (error) {
-    next(error);
+    const pagination = {
+      page: parseInt(page),
+      limit: take,
+      total,
+      totalPages,
+      hasNext: parseInt(page) < totalPages,
+      hasPrev: parseInt(page) > 1,
+    };
+    return success(res, messages, 'Messages fetched successfully', 200, { pagination });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -212,18 +203,15 @@ const getMessageStats = async (req, res, next) => {
       prisma.contactMessage.count({ where: { status: 'ARCHIVED' } }),
     ]);
 
-    res.status(200).json({
-      success: true,
-      data: {
-        total,
-        new: newCount,
-        read: readCount,
-        replied: repliedCount,
-        archived: archivedCount,
-      },
-    });
-  } catch (error) {
-    next(error);
+    return success(res, {
+      total,
+      new: newCount,
+      read: readCount,
+      replied: repliedCount,
+      archived: archivedCount,
+    }, 'Stats fetched successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -238,13 +226,9 @@ const getMessageById = async (req, res, next) => {
 
     const message = await prisma.contactMessage.findUnique({ where: { id } });
     if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
+      return error(res, 'Message not found', 404);
     }
 
-    // Auto-mark NEW messages as READ when viewed
     if (message.status === 'NEW') {
       await prisma.contactMessage.update({
         where: { id },
@@ -253,12 +237,9 @@ const getMessageById = async (req, res, next) => {
       message.status = 'READ';
     }
 
-    res.status(200).json({
-      success: true,
-      data: message,
-    });
-  } catch (error) {
-    next(error);
+    return success(res, message, 'Message fetched successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -274,18 +255,12 @@ const updateMessageStatus = async (req, res, next) => {
 
     const validStatuses = ['NEW', 'READ', 'REPLIED', 'ARCHIVED'];
     if (!status || !validStatuses.includes(status.toUpperCase())) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(', ')}`,
-      });
+      return error(res, `Invalid status. Must be one of: ${validStatuses.join(', ')}`, 400);
     }
 
     const message = await prisma.contactMessage.findUnique({ where: { id } });
     if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
+      return error(res, 'Message not found', 404);
     }
 
     const updated = await prisma.contactMessage.update({
@@ -293,12 +268,9 @@ const updateMessageStatus = async (req, res, next) => {
       data: { status: status.toUpperCase() },
     });
 
-    res.status(200).json({
-      success: true,
-      data: updated,
-    });
-  } catch (error) {
-    next(error);
+    return success(res, updated, 'Status updated successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -314,10 +286,7 @@ const addAdminNote = async (req, res, next) => {
 
     const message = await prisma.contactMessage.findUnique({ where: { id } });
     if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
+      return error(res, 'Message not found', 404);
     }
 
     const updated = await prisma.contactMessage.update({
@@ -325,12 +294,9 @@ const addAdminNote = async (req, res, next) => {
       data: { adminNote: note || null },
     });
 
-    res.status(200).json({
-      success: true,
-      data: updated,
-    });
-  } catch (error) {
-    next(error);
+    return success(res, updated, 'Note updated successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -345,20 +311,14 @@ const deleteMessage = async (req, res, next) => {
 
     const message = await prisma.contactMessage.findUnique({ where: { id } });
     if (!message) {
-      return res.status(404).json({
-        success: false,
-        message: 'Message not found',
-      });
+      return error(res, 'Message not found', 404);
     }
 
     await prisma.contactMessage.delete({ where: { id } });
 
-    res.status(200).json({
-      success: true,
-      message: 'Message deleted successfully',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'Message deleted successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 

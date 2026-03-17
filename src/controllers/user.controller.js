@@ -1,5 +1,6 @@
 const prisma = require('../config/db');
 const bcrypt = require('bcryptjs');
+const { success, error } = require('../utils/response');
 
 /**
  * Capitalize first letter, lowercase rest (e.g., "ADMIN" -> "Admin")
@@ -46,10 +47,7 @@ const createUser = async (req, res, next) => {
     const { email, firstName, lastName, password, role, status, avatar } = req.body;
 
     if (!email || !firstName || !lastName || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email, first name, last name, and password are required',
-      });
+      return error(res, 'Email, first name, last name, and password are required', 400);
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -66,13 +64,9 @@ const createUser = async (req, res, next) => {
       },
     });
 
-    res.status(201).json({
-      success: true,
-      message: 'User created successfully',
-      data: transformUser(user),
-    });
-  } catch (error) {
-    next(error);
+    return success(res, transformUser(user), 'User created successfully', 201);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -130,20 +124,17 @@ const getAllUsers = async (req, res, next) => {
       prisma.user.count({ where }),
     ]);
 
-    res.status(200).json({
-      success: true,
-      data: users.map(transformUser),
-      pagination: {
-        page: parseInt(page),
-        limit: take,
-        total,
-        totalPages: Math.ceil(total / take),
-        hasNext: skip + take < total,
-        hasPrev: parseInt(page) > 1,
-      },
-    });
-  } catch (error) {
-    next(error);
+    const pagination = {
+      page: parseInt(page),
+      limit: take,
+      total,
+      totalPages: Math.ceil(total / take),
+      hasNext: skip + take < total,
+      hasPrev: parseInt(page) > 1,
+    };
+    return success(res, users.map(transformUser), 'Users fetched successfully', 200, { pagination });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -161,18 +152,12 @@ const getUserById = async (req, res, next) => {
           });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
-    res.status(200).json({
-      success: true,
-      data: transformUser(user),
-    });
-  } catch (error) {
-    next(error);
+    return success(res, transformUser(user), 'User fetched successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -192,10 +177,7 @@ const updateUser = async (req, res, next) => {
     });
 
     if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     const updateData = {};
@@ -216,13 +198,9 @@ const updateUser = async (req, res, next) => {
       data: updateData,
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'User updated successfully',
-      data: transformUser(user),
-    });
-  } catch (error) {
-    next(error);
+    return success(res, transformUser(user), 'User updated successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -240,22 +218,16 @@ const deleteUser = async (req, res, next) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     await prisma.user.delete({
       where: { id },
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'User deleted successfully',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'User deleted successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -274,10 +246,7 @@ const toggleUserStatus = async (req, res, next) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     const newStatus = status
@@ -291,13 +260,9 @@ const toggleUserStatus = async (req, res, next) => {
       data: { status: newStatus },
     });
 
-    res.status(200).json({
-      success: true,
-      message: `User ${newStatus.toLowerCase()} successfully`,
-      data: transformUser(updatedUser),
-    });
-  } catch (error) {
-    next(error);
+    return success(res, transformUser(updatedUser), `User ${newStatus.toLowerCase()} successfully`, 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -312,18 +277,12 @@ const changeUserRole = async (req, res, next) => {
     const { role } = req.body;
 
     if (!role) {
-      return res.status(400).json({
-        success: false,
-        message: 'Role is required',
-      });
+      return error(res, 'Role is required', 400);
     }
 
     const validRoles = ['CUSTOMER', 'ADMIN'];
     if (!validRoles.includes(role.toUpperCase())) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid role. Must be CUSTOMER or ADMIN',
-      });
+      return error(res, 'Invalid role. Must be CUSTOMER or ADMIN', 400);
     }
 
     const user = await prisma.user.findUnique({
@@ -331,10 +290,7 @@ const changeUserRole = async (req, res, next) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     const updatedUser = await prisma.user.update({
@@ -342,13 +298,9 @@ const changeUserRole = async (req, res, next) => {
       data: { role: role.toUpperCase() },
     });
 
-    res.status(200).json({
-      success: true,
-      message: `User role changed to ${role}`,
-      data: transformUser(updatedUser),
-    });
-  } catch (error) {
-    next(error);
+    return success(res, transformUser(updatedUser), `User role changed to ${role}`, 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -368,18 +320,15 @@ const getUserStats = async (req, res, next) => {
         prisma.user.count({ where: { status: 'INACTIVE' } }),
       ]);
 
-    res.status(200).json({
-      success: true,
-      data: {
-        total: totalUsers,
-        customers,
-        admins,
-        active: activeUsers,
-        inactive: inactiveUsers,
-      },
-    });
-  } catch (error) {
-    next(error);
+    return success(res, {
+      total: totalUsers,
+      customers,
+      admins,
+      active: activeUsers,
+      inactive: inactiveUsers,
+    }, 'Stats fetched successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 

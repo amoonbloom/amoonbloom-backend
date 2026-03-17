@@ -27,6 +27,11 @@ const updateQtyValidation = [
   body('quantity').isInt({ min: 0 }).withMessage('Quantity must be 0 or more'),
 ];
 
+const updateItemMessageValidation = [
+  body('productId').isUUID().withMessage('Valid productId is required'),
+  body('message').optional().trim(),
+];
+
 /**
  * @swagger
  * /cart:
@@ -87,6 +92,57 @@ router.post('/', addValidation, handleValidationErrors, cartController.addToCart
  *         description: Product not in cart or not found
  */
 router.patch('/quantity', updateQtyValidation, handleValidationErrors, cartController.updateQuantity);
+
+/**
+ * @swagger
+ * /cart/item/message:
+ *   patch:
+ *     summary: Update per-item message
+ *     description: Update or clear the message for a specific product in the cart (e.g. gift note, engraving, "name john doe"). Use the same productId as in the cart. Send empty string or omit message to clear.
+ *     tags: [Cart]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [productId]
+ *             properties:
+ *               productId:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID of the product in the cart to update
+ *                 example: "b0299163-001d-46d0-9492-2e5b3a4e96de"
+ *               message:
+ *                 type: string
+ *                 description: New message for this line item. Omit or send empty string to clear.
+ *                 example: "name John Doe"
+ *           example:
+ *             productId: "b0299163-001d-46d0-9492-2e5b3a4e96de"
+ *             message: "name John Doe"
+ *     responses:
+ *       200:
+ *         description: Item message updated; returns updated cart
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string, example: "Item message updated" }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id: { type: string, format: uuid }
+ *                     items: { type: array }
+ *                     totalAmount: { type: number }
+ *                     orderMessage: { type: string, nullable: true }
+ *       404:
+ *         description: Product not in cart
+ */
+router.patch('/item/message', updateItemMessageValidation, handleValidationErrors, cartController.updateItemMessage);
 
 /**
  * @swagger

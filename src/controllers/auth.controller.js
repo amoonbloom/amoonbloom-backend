@@ -4,6 +4,8 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { OAuth2Client } = require('google-auth-library');
 const nodemailer = require('nodemailer');
+const { verifyAppleToken } = require('../services/appleAuth.service');
+const { success, error } = require('../utils/response');
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
@@ -40,18 +42,12 @@ const signup = async (req, res, next) => {
     const { firstName, lastName, email, password } = req.body;
 
     if (!firstName || !lastName || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'First name, last name, email, and password are required',
-      });
+      return error(res, 'First name, last name, email, and password are required', 400);
     }
 
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'Email already registered',
-      });
+      return error(res, 'Email already registered', 409);
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -67,14 +63,9 @@ const signup = async (req, res, next) => {
     });
 
     const token = generateToken(user.id, user.role);
-
-    res.status(201).json({
-      success: true,
-      message: 'User registered successfully',
-      data: { user, token },
-    });
-  } catch (error) {
-    next(error);
+    return success(res, { user, token }, 'User registered successfully', 201);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -84,47 +75,33 @@ const signin = async (req, res, next) => {
     const { email, password } = req.body;
 
     if (!email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required',
-      });
+      return error(res, 'Email and password are required', 400);
     }
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user || !user.password) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password',
-      });
+      return error(res, 'Invalid email or password', 401);
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid email or password',
-      });
+      return error(res, 'Invalid email or password', 401);
     }
 
     const token = generateToken(user.id, user.role);
-
-    res.status(200).json({
-      success: true,
-      message: 'Login successful',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          role: user.role,
-          status: user.status,
-        },
-        token,
+    return success(res, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        status: user.status,
       },
-    });
-  } catch (error) {
-    next(error);
+      token,
+    }, 'Login successful', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -135,10 +112,7 @@ const googleLogin = async (req, res, next) => {
     const { accessToken } = req.body;
 
     if (!idToken && !accessToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Google token is required',
-      });
+      return error(res, 'Google token is required', 400);
     }
 
     let googleId, email, given_name, family_name, picture;
@@ -157,10 +131,7 @@ const googleLogin = async (req, res, next) => {
         family_name = payload.family_name;
         picture = payload.picture;
       } catch (verifyError) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid or expired Google token',
-        });
+        return error(res, 'Invalid or expired Google token', 401);
       }
     } else {
       // Flow 2: Access token verification (from useGoogleLogin custom button)
@@ -169,10 +140,7 @@ const googleLogin = async (req, res, next) => {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
         if (!response.ok) {
-          return res.status(401).json({
-            success: false,
-            message: 'Invalid or expired Google access token',
-          });
+          return error(res, 'Invalid or expired Google access token', 401);
         }
         const userInfo = await response.json();
         googleId = userInfo.sub;
@@ -181,18 +149,12 @@ const googleLogin = async (req, res, next) => {
         family_name = userInfo.family_name;
         picture = userInfo.picture;
       } catch (fetchError) {
-        return res.status(401).json({
-          success: false,
-          message: 'Failed to verify Google access token',
-        });
+        return error(res, 'Failed to verify Google access token', 401);
       }
     }
 
     if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Google account does not have an email address',
-      });
+      return error(res, 'Google account does not have an email address', 400);
     }
 
     const firstName = given_name || '';
@@ -242,36 +204,130 @@ const googleLogin = async (req, res, next) => {
       }
     }
 
-    // Block inactive users
     if (user.status === 'INACTIVE') {
-      return res.status(403).json({
-        success: false,
-        message: 'Your account has been deactivated. Please contact support.',
-      });
+      return error(res, 'Your account has been deactivated. Please contact support.', 403);
+    }
+
+    const token = generateToken(user.id, user.role);
+    return success(res, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.avatar,
+        role: user.role,
+        status: user.status,
+        isEmailVerified: user.isEmailVerified,
+      },
+      token,
+      isNewUser,
+    }, isNewUser ? 'Account created successfully' : 'Google login successful', 200);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Apple Login
+const appleLogin = async (req, res, next) => {
+  try {
+    const identityToken = req.body.identityToken || req.body.id_token;
+    const { firstName: bodyFirstName, lastName: bodyLastName, email: bodyEmail } = req.body;
+
+    if (!identityToken) {
+      return error(res, 'Identity token is required', 400);
+    }
+
+    const clientId = process.env.APPLE_CLIENT_ID;
+    if (!clientId) {
+      return error(res, 'Apple Sign In is not configured', 503);
+    }
+
+    let payload;
+    try {
+      payload = await verifyAppleToken(identityToken, clientId);
+    } catch (verifyErr) {
+      return error(
+        res,
+        verifyErr.message === 'Invalid Apple identity token' || verifyErr.name === 'JsonWebTokenError'
+          ? 'Invalid or expired Apple identity token'
+          : 'Failed to verify Apple token',
+        401
+      );
+    }
+
+    const appleId = payload.sub;
+    const emailFromToken = payload.email || null;
+    const email = emailFromToken || bodyEmail || null;
+    const firstName = (bodyFirstName || '').trim() || null;
+    const lastName = (bodyLastName || '').trim() || null;
+
+    let user = await prisma.user.findUnique({ where: { appleId } });
+    let isNewUser = false;
+
+    if (user) {
+      const updateData = {};
+      if (firstName) updateData.firstName = firstName;
+      if (lastName) updateData.lastName = lastName;
+      if (Object.keys(updateData).length > 0) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: updateData,
+        });
+      }
+    } else {
+      user = await prisma.user.findUnique({ where: { email } });
+      if (user) {
+        user = await prisma.user.update({
+          where: { id: user.id },
+          data: {
+            appleId,
+            isEmailVerified: user.isEmailVerified || !!emailFromToken,
+          },
+        });
+      } else {
+        if (!email) {
+          return error(
+            res,
+            'Email is required to create an account. Please share your email with Sign in with Apple.',
+            400
+          );
+        }
+        user = await prisma.user.create({
+          data: {
+            appleId,
+            email,
+            firstName: firstName || 'Apple',
+            lastName: lastName || 'User',
+            isEmailVerified: !!emailFromToken,
+          },
+        });
+        isNewUser = true;
+      }
+    }
+
+    if (user.status === 'INACTIVE') {
+      return error(res, 'Your account has been deactivated. Please contact support.', 403);
     }
 
     const token = generateToken(user.id, user.role);
 
-    res.status(200).json({
-      success: true,
-      message: isNewUser ? 'Account created successfully' : 'Google login successful',
-      data: {
-        user: {
-          id: user.id,
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          avatar: user.avatar,
-          role: user.role,
-          status: user.status,
-          isEmailVerified: user.isEmailVerified,
-        },
-        token,
-        isNewUser,
+    return success(res, {
+      user: {
+        id: user.id,
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        avatar: user.avatar,
+        role: user.role,
+        status: user.status,
+        isEmailVerified: user.isEmailVerified,
       },
-    });
-  } catch (error) {
-    next(error);
+      token,
+      isNewUser,
+    }, isNewUser ? 'Account created successfully' : 'Apple login successful', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -280,38 +336,26 @@ const changePassword = async (req, res, next) => {
   try {
     const { userId } = req.params;
     if (req.userId && req.userId !== userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+      return error(res, 'Forbidden', 403);
     }
     const { currentPassword, newPassword } = req.body;
 
     if (!currentPassword || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'Current password and new password are required',
-      });
+      return error(res, 'Current password and new password are required', 400);
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     if (!user.password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot change password for Google-only accounts',
-      });
+      return error(res, 'Cannot change password for Google-only accounts', 400);
     }
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
     if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Current password is incorrect',
-      });
+      return error(res, 'Current password is incorrect', 401);
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
@@ -320,12 +364,9 @@ const changePassword = async (req, res, next) => {
       data: { password: hashedPassword },
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'Password changed successfully',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'Password changed successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -335,18 +376,12 @@ const forgotPassword = async (req, res, next) => {
     const { email } = req.body;
 
     if (!email) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email is required',
-      });
+      return error(res, 'Email is required', 400);
     }
 
     const user = await prisma.user.findUnique({ where: { email } });
     if (!user) {
-      return res.status(200).json({
-        success: true,
-        message: 'If email exists, a reset link will be sent',
-      });
+      return success(res, null, 'If email exists, a reset link will be sent', 200);
     }
 
     const resetToken = uuidv4();
@@ -371,12 +406,9 @@ const forgotPassword = async (req, res, next) => {
       `
     );
 
-    res.status(200).json({
-      success: true,
-      message: 'If email exists, a reset link will be sent',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'If email exists, a reset link will be sent', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -386,10 +418,7 @@ const resetPassword = async (req, res, next) => {
     const { token, newPassword } = req.body;
 
     if (!token || !newPassword) {
-      return res.status(400).json({
-        success: false,
-        message: 'Token and new password are required',
-      });
+      return error(res, 'Token and new password are required', 400);
     }
 
     const user = await prisma.user.findFirst({
@@ -400,10 +429,7 @@ const resetPassword = async (req, res, next) => {
     });
 
     if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid or expired reset token',
-      });
+      return error(res, 'Invalid or expired reset token', 400);
     }
 
     const hashedPassword = await bcrypt.hash(newPassword, 12);
@@ -417,21 +443,111 @@ const resetPassword = async (req, res, next) => {
       },
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'Password reset successfully',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'Password reset successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
-// Get Current User (Me)
+// Get current user profile by token (for GET /user/profile)
+const getProfile = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        avatar: true,
+        role: true,
+        status: true,
+        isEmailVerified: true,
+        preferredLanguage: true,
+        addressCountry: true,
+        addressCity: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    if (!user) {
+      return error(res, 'User not found', 404);
+    }
+
+    return success(res, user, undefined, 200);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Update preferred language (current user by token)
+const updatePreferredLanguage = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { preferredLanguage } = req.body;
+
+    if (preferredLanguage === undefined || preferredLanguage === null) {
+      return error(res, 'preferredLanguage is required', 400);
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data: { preferredLanguage: String(preferredLanguage).trim() || null },
+      select: {
+        id: true,
+        preferredLanguage: true,
+        updatedAt: true,
+      },
+    });
+
+    return success(res, { preferredLanguage: user.preferredLanguage }, 'Preferred language updated successfully', 200);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Update address (country, city) for current user by token
+const updateAddress = async (req, res, next) => {
+  try {
+    const userId = req.userId;
+    const { addressCountry, addressCity } = req.body;
+
+    const data = {};
+    if (addressCountry !== undefined) data.addressCountry = addressCountry ? String(addressCountry).trim() : null;
+    if (addressCity !== undefined) data.addressCity = addressCity ? String(addressCity).trim() : null;
+
+    if (Object.keys(data).length === 0) {
+      return error(res, 'At least one of addressCountry or addressCity is required', 400);
+    }
+
+    const user = await prisma.user.update({
+      where: { id: userId },
+      data,
+      select: {
+        id: true,
+        addressCountry: true,
+        addressCity: true,
+        updatedAt: true,
+      },
+    });
+
+    return success(res, {
+      addressCountry: user.addressCountry,
+      addressCity: user.addressCity,
+    }, 'Address updated successfully', 200);
+  } catch (err) {
+    next(err);
+  }
+};
+
+// Get Current User (Me) by userId (must match token)
 const getMe = async (req, res, next) => {
   try {
     const { userId } = req.params;
     if (req.userId && req.userId !== userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+      return error(res, 'Forbidden', 403);
     }
 
     const user = await prisma.user.findUnique({
@@ -443,6 +559,7 @@ const getMe = async (req, res, next) => {
         lastName: true,
         password: true,
         googleId: true,
+        appleId: true,
         role: true,
         status: true,
         avatar: true,
@@ -453,24 +570,19 @@ const getMe = async (req, res, next) => {
     });
 
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
-    const { password, googleId, ...userData } = user;
+    const { password, googleId, appleId, ...userData } = user;
 
-    res.status(200).json({
-      success: true,
-      data: {
-        ...userData,
-        hasPassword: !!password,
-        isGoogleUser: !!googleId,
-      },
-    });
-  } catch (error) {
-    next(error);
+    return success(res, {
+      ...userData,
+      hasPassword: !!password,
+      isGoogleUser: !!googleId,
+      isAppleUser: !!appleId,
+    }, undefined, 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -479,32 +591,24 @@ const updateProfile = async (req, res, next) => {
   try {
     const { userId } = req.params;
     if (req.userId && req.userId !== userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+      return error(res, 'Forbidden', 403);
     }
     const { firstName, lastName, email } = req.body;
 
-    // Check if user exists first
     const existingUser = await prisma.user.findUnique({
       where: { id: userId },
     });
 
     if (!existingUser) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
-    // Check if email is being changed and if new email already exists
     if (email && email !== existingUser.email) {
       const emailExists = await prisma.user.findUnique({
         where: { email },
       });
       if (emailExists) {
-        return res.status(409).json({
-          success: false,
-          message: 'Email already in use',
-        });
+        return error(res, 'Email already in use', 409);
       }
     }
 
@@ -530,13 +634,9 @@ const updateProfile = async (req, res, next) => {
       },
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'Profile updated successfully',
-      data: user,
-    });
-  } catch (error) {
-    next(error);
+    return success(res, user, 'Profile updated successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -545,36 +645,27 @@ const deleteAccount = async (req, res, next) => {
   try {
     const { userId } = req.params;
     if (req.userId && req.userId !== userId) {
-      return res.status(403).json({ success: false, message: 'Forbidden' });
+      return error(res, 'Forbidden', 403);
     }
     const { password } = req.body;
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found',
-      });
+      return error(res, 'User not found', 404);
     }
 
     if (user.password && password) {
       const isMatch = await bcrypt.compare(password, user.password);
       if (!isMatch) {
-        return res.status(401).json({
-          success: false,
-          message: 'Password is incorrect',
-        });
+        return error(res, 'Password is incorrect', 401);
       }
     }
 
     await prisma.user.delete({ where: { id: userId } });
 
-    res.status(200).json({
-      success: true,
-      message: 'Account deleted successfully',
-    });
-  } catch (error) {
-    next(error);
+    return success(res, null, 'Account deleted successfully', 200);
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -582,10 +673,14 @@ module.exports = {
   signup,
   signin,
   googleLogin,
+  appleLogin,
   changePassword,
   forgotPassword,
   resetPassword,
   getMe,
+  getProfile,
   updateProfile,
+  updatePreferredLanguage,
+  updateAddress,
   deleteAccount,
 };

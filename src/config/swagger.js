@@ -10,16 +10,15 @@ const options = {
     info: {
       title: 'Amoonis Boutique API',
       version: '1.0.0',
-      description: 'Ecommerce API: Auth, Users, Categories, Products, Cart, Orders, Contact, Settings, Upload. All routes are under `/api/v1` or `/api`. Use **Authorize** with the JWT from signin for protected endpoints.',
+      description: 'Ecommerce API: Auth, User Profile, Users, Categories, Products, Cart, Orders, Upload. All routes are under `/api/v1` or `/api`. Use **Authorize** with the JWT from signin for protected endpoints.',
     },
     servers: [
       { url: `${baseUrl}/api/v1`, description: 'API v1 (all routes)' },
     ],
     tags: [
-      { name: 'Auth', description: 'Signup, login, Google OAuth, password reset' },
+      { name: 'Auth', description: 'Signup, login, Google OAuth, password reset, get/update user by ID' },
+      { name: 'User Profile', description: 'Current user profile by token: get profile, update preferred language, update address' },
       { name: 'Users', description: 'User CRUD and stats (admin)' },
-      { name: 'Contact', description: 'Contact form and admin messages' },
-      { name: 'Settings', description: 'Site settings (public and admin)' },
       { name: 'Upload', description: 'Image upload (Bunny CDN)' },
       { name: 'Categories', description: 'Product categories (admin CRUD, public list)' },
       { name: 'Products', description: 'Products (admin CRUD, public list/detail)' },
@@ -123,6 +122,51 @@ const options = {
             updatedAt: {
               type: 'string',
               format: 'date-time',
+            },
+          },
+        },
+        UserProfile: {
+          type: 'object',
+          description: 'Current user profile (token-based). Includes optional preferred language and address.',
+          properties: {
+            id: { type: 'string', format: 'uuid', description: 'User UUID' },
+            email: { type: 'string', format: 'email', description: 'User email' },
+            firstName: { type: 'string', description: 'First name' },
+            lastName: { type: 'string', description: 'Last name' },
+            avatar: { type: 'string', nullable: true, description: 'Profile image URL' },
+            role: { type: 'string', enum: ['CUSTOMER', 'ADMIN'], description: 'User role' },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], description: 'Account status' },
+            isEmailVerified: { type: 'boolean', description: 'Email verification status' },
+            preferredLanguage: { type: 'string', nullable: true, example: 'en', description: 'User preferred language code (e.g. en, ar)' },
+            addressCountry: { type: 'string', nullable: true, example: 'United Arab Emirates', description: 'User address country' },
+            addressCity: { type: 'string', nullable: true, example: 'Dubai', description: 'User address city' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        PreferredLanguageInput: {
+          type: 'object',
+          required: ['preferredLanguage'],
+          properties: {
+            preferredLanguage: {
+              type: 'string',
+              example: 'en',
+              description: 'Preferred language code (e.g. en, ar, fr). Stored for the authenticated user.',
+            },
+          },
+        },
+        AddressInput: {
+          type: 'object',
+          properties: {
+            addressCountry: {
+              type: 'string',
+              example: 'United Arab Emirates',
+              description: 'User address country. Optional.',
+            },
+            addressCity: {
+              type: 'string',
+              example: 'Dubai',
+              description: 'User address city. Optional.',
             },
           },
         },
@@ -313,7 +357,16 @@ const options = {
       },
     },
   },
-  apis: ['./src/routes/*.js'],
+  apis: [
+    './src/routes/auth.routes.js',
+    './src/routes/user.routes.js',
+    './src/routes/userProfile.routes.js',
+    './src/routes/upload.routes.js',
+    './src/routes/category.routes.js',
+    './src/routes/product.routes.js',
+    './src/routes/cart.routes.js',
+    './src/routes/order.routes.js',
+  ],
 };
 
 const swaggerSpec = swaggerJsdoc(options);

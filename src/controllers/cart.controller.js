@@ -34,6 +34,22 @@ async function updateQuantity(req, res, next) {
   }
 }
 
+async function updateItemMessage(req, res, next) {
+  try {
+    const userId = req.userId;
+    const { productId, message } = req.body;
+    const { error: errMsg } = await cartService.updateItemMessage(userId, {
+      productId,
+      message,
+    });
+    if (errMsg) return error(res, errMsg, 404);
+    const data = await cartService.getCart(userId);
+    return success(res, data, 'Item message updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function removeFromCart(req, res, next) {
   try {
     const userId = req.userId;
@@ -81,6 +97,7 @@ async function clearCart(req, res, next) {
 module.exports = {
   addToCart,
   updateQuantity,
+  updateItemMessage,
   removeFromCart,
   getCart,
   updateOrderMessage,
