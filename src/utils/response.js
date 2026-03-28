@@ -1,9 +1,15 @@
 /**
- * Consistent API response helpers.
- * Success: { success: true, message?, data?, meta? }
+ * Single source of truth for API response format. Use for all success/error responses.
+ *
+ * Success: { success: true, message, data?, meta? }
+ *   - message: string (default 'Success')
+ *   - data: optional (omit when undefined; can be null)
+ *   - meta: optional object (e.g. { pagination }, { total })
+ *
  * Error:   { success: false, message, errors? }
+ *   - message: string
+ *   - errors: optional array (e.g. validation [{ field, message }])
  */
-
 function success(res, data, message = 'Success', status = 200, meta = null) {
   const payload = { success: true, message };
   if (data !== undefined) payload.data = data;

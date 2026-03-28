@@ -38,6 +38,68 @@ model User {
 }
 
 // ============================================
+// SECTIONS (admin-created blocks for user panel, e.g. Ramadan Deals)
+// ============================================
+
+model Section {
+  id        String   @id @default(uuid())
+  title     String
+  image     String?
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  products   SectionProduct[]
+  categories SectionCategory[]
+
+  @@index([sortOrder])
+}
+
+model SectionProduct {
+  id        String   @id @default(uuid())
+  sectionId String
+  productId String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, productId])
+  @@index([sectionId])
+  @@index([productId])
+}
+
+model SectionCategory {
+  id         String   @id @default(uuid())
+  sectionId  String
+  categoryId String
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  section  Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([sectionId, categoryId])
+  @@index([sectionId])
+  @@index([categoryId])
+}
+
+// ============================================
+// LANDING BANNERS
+// ============================================
+
+model BannerImage {
+  id        String   @id @default(uuid())
+  url       String   @db.Text
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([sortOrder])
+}
+
+// ============================================
 // SETTINGS
 // ============================================
 
@@ -87,7 +149,8 @@ model Category {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  products Product[]
+  products        Product[]
+  sectionCategories SectionCategory[]
 
   @@index([title])
 }
@@ -96,20 +159,51 @@ model Product {
   id              String   @id @default(uuid())
   title           String
   subtitle        String?
-  description     String?  @db.Text
   price           Decimal  @db.Decimal(10, 2)
   discountedPrice Decimal? @db.Decimal(10, 2)
+  quantity        Int      @default(0)
   categoryId      String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  category   Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  images     ProductImage[]
-  cartItems  CartItem[]
-  orderItems OrderItem[]
+  category       Category?        @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  images         ProductImage[]
+  descriptions   ProductDescription[]
+  productOptions ProductOption[]
+  cartItems      CartItem[]
+  orderItems     OrderItem[]
+  sectionProducts SectionProduct[]
 
   @@index([categoryId])
   @@index([title])
+}
+
+model ProductOption {
+  id        String   @id @default(uuid())
+  productId String
+  title     String
+  options   String[]
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([productId, sortOrder])
+}
+
+model ProductDescription {
+  id          String   @id @default(uuid())
+  productId   String
+  title       String?  @db.Text
+  description String   @db.Text
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([productId, sortOrder])
 }
 
 model ProductImage {

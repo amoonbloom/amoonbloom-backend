@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate deploy",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "e2e": "node scripts/e2e-test.js"
   },
   "keywords": [
     "express",

@@ -1,19 +1,16 @@
 const jwt = require('jsonwebtoken');
 const prisma = require('../config/db');
+const { error } = require('../utils/response');
 
 /**
- * Verify JWT token middleware
- * Extracts user/admin from token and attaches to request
+ * Verify JWT token middleware. Returns consistent { success: false, message } on auth failure.
  */
 const verifyToken = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Access denied. No token provided.',
-      });
+      return error(res, 'Access denied. No token provided.', 401);
     }
 
     const token = authHeader.split(' ')[1];
@@ -23,53 +20,38 @@ const verifyToken = async (req, res, next) => {
     req.userRole = decoded.role;
 
     next();
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired. Please login again.',
-      });
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return error(res, 'Token expired. Please login again.', 401);
     }
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token.',
-      });
+    if (err.name === 'JsonWebTokenError') {
+      return error(res, 'Invalid token.', 401);
     }
-
-    next(error);
+    next(err);
   }
 };
 
 /**
- * Verify admin token middleware
- * Checks if the token belongs to a user with ADMIN role
+ * Verify admin token middleware. Returns consistent { success: false, message } on failure.
  */
 const verifyAdmin = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Access denied. No token provided.',
-      });
+      return error(res, 'Access denied. No token provided.', 401);
     }
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Check if user exists and has ADMIN role
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
+      select: { id: true, role: true },
     });
 
     if (!user || user.role !== 'ADMIN') {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. Admin privileges required.',
-      });
+      return error(res, 'Access denied. Admin privileges required.', 403);
     }
 
     req.userId = decoded.id;
@@ -77,53 +59,38 @@ const verifyAdmin = async (req, res, next) => {
     req.isAdmin = true;
 
     next();
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired. Please login again.',
-      });
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return error(res, 'Token expired. Please login again.', 401);
     }
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token.',
-      });
+    if (err.name === 'JsonWebTokenError') {
+      return error(res, 'Invalid token.', 401);
     }
-
-    next(error);
+    next(err);
   }
 };
 
 /**
- * Verify instructor or admin middleware
- * Allows access for instructors and admins
+ * Verify instructor or admin middleware. Returns consistent { success: false, message } on failure.
  */
 const verifyInstructorOrAdmin = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({
-        success: false,
-        message: 'Access denied. No token provided.',
-      });
+      return error(res, 'Access denied. No token provided.', 401);
     }
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-    // Check user exists and has appropriate role
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
+      select: { id: true, role: true },
     });
 
     if (!user) {
-      return res.status(403).json({
-        success: false,
-        message: 'Access denied. User not found.',
-      });
+      return error(res, 'Access denied. User not found.', 403);
     }
 
     if (user.role === 'ADMIN') {
@@ -140,26 +107,15 @@ const verifyInstructorOrAdmin = async (req, res, next) => {
       return next();
     }
 
-    return res.status(403).json({
-      success: false,
-      message: 'Access denied. Instructor or Admin privileges required.',
-    });
-  } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Token expired. Please login again.',
-      });
+    return error(res, 'Access denied. Instructor or Admin privileges required.', 403);
+  } catch (err) {
+    if (err.name === 'TokenExpiredError') {
+      return error(res, 'Token expired. Please login again.', 401);
     }
-
-    if (error.name === 'JsonWebTokenError') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token.',
-      });
+    if (err.name === 'JsonWebTokenError') {
+      return error(res, 'Invalid token.', 401);
     }
-
-    next(error);
+    next(err);
   }
 };
 

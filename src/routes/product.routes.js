@@ -31,9 +31,10 @@ const { publicLimiter } = require('../middleware/rateLimit');
  *           example:
  *             title: Summer Dress
  *             subtitle: Light cotton
- *             description: Comfortable summer dress
+ *             descriptions: [{ description: "Comfortable summer dress" }]
  *             price: 49.99
  *             discountedPrice: 39.99
+ *             quantity: 10
  *     responses:
  *       201:
  *         description: Product created
@@ -46,10 +47,13 @@ const { publicLimiter } = require('../middleware/rateLimit');
 const createValidation = [
   body('title').trim().notEmpty().withMessage('Title is required'),
   body('subtitle').optional().trim(),
-  body('description').optional().trim(),
   body('price').isFloat({ min: 0 }).withMessage('Price must be a positive number'),
   body('discountedPrice').optional().isFloat({ min: 0 }),
+  body('quantity').optional().isInt({ min: 0 }).withMessage('Quantity must be a non-negative integer'),
   body('categoryId').optional().isUUID().withMessage('categoryId must be a valid UUID when provided'),
+  body('descriptions').optional().isArray().withMessage('descriptions must be an array'),
+  body('descriptions.*.title').optional().trim(),
+  body('descriptions.*.description').optional().trim(),
   body('images')
     .optional()
     .isArray()
@@ -64,16 +68,27 @@ const createValidation = [
     .trim()
     .notEmpty()
     .withMessage('Each image must be a non-empty URL string'),
+  body('descriptions').optional().custom((arr) => {
+    if (!Array.isArray(arr)) return true;
+    return arr.every((d) => d && typeof d === 'object' && (d.description != null && String(d.description).trim() !== ''));
+  }).withMessage('Each description item must have a non-empty description field'),
+  body('productOptions').optional().isArray().withMessage('productOptions must be an array'),
+  body('productOptions.*.title').optional().trim().notEmpty().withMessage('Each productOption must have a non-empty title'),
+  body('productOptions.*.options').optional().isArray().withMessage('productOptions.*.options must be an array of strings'),
+  body('productOptions.*.options.*').optional().isString().trim(),
 ];
 
 const updateValidation = [
   param('id').isUUID().withMessage('Valid product ID required'),
   body('title').optional().trim().notEmpty(),
   body('subtitle').optional().trim(),
-  body('description').optional().trim(),
   body('price').optional().isFloat({ min: 0 }),
   body('discountedPrice').optional().isFloat({ min: 0 }),
+  body('quantity').optional().isInt({ min: 0 }).withMessage('Quantity must be a non-negative integer'),
   body('categoryId').optional().isUUID(),
+  body('descriptions').optional().isArray().withMessage('descriptions must be an array'),
+  body('descriptions.*.title').optional().trim(),
+  body('descriptions.*.description').optional().trim(),
   body('images')
     .optional()
     .isArray()
@@ -88,6 +103,14 @@ const updateValidation = [
     .trim()
     .notEmpty()
     .withMessage('Each image must be a non-empty URL string'),
+  body('descriptions').optional().custom((arr) => {
+    if (!Array.isArray(arr)) return true;
+    return arr.every((d) => d && typeof d === 'object' && (d.description != null && String(d.description).trim() !== ''));
+  }).withMessage('Each description item must have a non-empty description field'),
+  body('productOptions').optional().isArray().withMessage('productOptions must be an array'),
+  body('productOptions.*.title').optional().trim().notEmpty().withMessage('Each productOption must have a non-empty title'),
+  body('productOptions.*.options').optional().isArray().withMessage('productOptions.*.options must be an array of strings'),
+  body('productOptions.*.options.*').optional().isString().trim(),
 ];
 
 const idParam = [param('id').isUUID().withMessage('Valid product ID required')];

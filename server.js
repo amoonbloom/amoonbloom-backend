@@ -38,6 +38,8 @@ const categoryRoutes = require('./src/routes/category.routes');
 const productRoutes = require('./src/routes/product.routes');
 const cartRoutes = require('./src/routes/cart.routes');
 const orderRoutes = require('./src/routes/order.routes');
+const bannerRoutes = require('./src/routes/banner.routes');
+const sectionRoutes = require('./src/routes/section.routes');
 const errorHandler = require('./src/middleware/errorHandler');
 
 const app = express();
@@ -92,6 +94,8 @@ v1Router.use('/categories', categoryRoutes);
 v1Router.use('/products', productRoutes);
 v1Router.use('/cart', cartRoutes);
 v1Router.use('/orders', orderRoutes);
+v1Router.use('/banners', bannerRoutes);
+v1Router.use('/sections', sectionRoutes);
 
 app.use('/api/v1', v1Router);
 
@@ -106,6 +110,8 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
+app.use('/api/banners', bannerRoutes);
+app.use('/api/sections', sectionRoutes);
 
 app.use(errorHandler);
 

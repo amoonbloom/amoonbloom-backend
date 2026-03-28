@@ -6,16 +6,29 @@ function decimalToNumber(v) {
   return v == null ? null : Number(v);
 }
 
+const orderProductInclude = {
+  images: { orderBy: { sortOrder: 'asc' } },
+  descriptions: { orderBy: { sortOrder: 'asc' } },
+  productOptions: { orderBy: { sortOrder: 'asc' } },
+};
+
 function mapProductForDisplay(product) {
   if (!product) return null;
   const imgs = (product.images || []).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
   const urls = imgs.map((i) => i.url);
+  const descs = (product.descriptions || []).sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+  const descriptions = descs.map((d) => ({ id: d.id, title: d.title ?? null, description: d.description }));
+  const productOptionsList = (product.productOptions || [])
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    .map((o) => ({ id: o.id, title: o.title, options: Array.isArray(o.options) ? o.options : [] }));
   return {
     id: product.id,
     title: product.title,
     subtitle: product.subtitle ?? null,
     image: urls[0] ?? null,
     images: urls,
+    descriptions,
+    productOptions: productOptionsList,
   };
 }
 
@@ -61,7 +74,7 @@ async function createOrder(userId) {
       where: { id: orderRecord.id },
       include: {
         items: {
-          include: { product: { include: { images: { orderBy: { sortOrder: 'asc' } } } } },
+          include: { product: { include: orderProductInclude } },
         },
       },
     });
@@ -99,7 +112,7 @@ async function getOrderById(orderId, userId = null) {
     where,
     include: {
       items: {
-        include: { product: { include: { images: { orderBy: { sortOrder: 'asc' } } } } },
+        include: { product: { include: orderProductInclude } },
       },
     },
   });
@@ -173,7 +186,7 @@ async function updateOrderStatus(orderId, status) {
     data: { status },
     include: {
       items: {
-        include: { product: { include: { images: { orderBy: { sortOrder: 'asc' } } } } },
+        include: { product: { include: orderProductInclude } },
       },
     },
   });

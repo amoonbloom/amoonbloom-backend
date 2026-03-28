@@ -24,6 +24,8 @@ const options = {
       { name: 'Products', description: 'Products (admin CRUD, public list/detail)' },
       { name: 'Cart', description: 'User cart (add, update, remove, get)' },
       { name: 'Orders', description: 'Checkout and order management' },
+      { name: 'Banners', description: 'Landing page banners (public list; admin add, reorder, delete)' },
+      { name: 'Sections', description: 'Admin-created sections for user panel (e.g. Ramadan Deals) with products and categories' },
     ],
     components: {
       securitySchemes: {
@@ -244,16 +246,40 @@ const options = {
         },
         Product: {
           type: 'object',
-          description: 'Product with price, category, and ordered images',
+          description: 'Product with price, category, ordered images, and multiple descriptions (title optional per item)',
           properties: {
             id: { type: 'string', format: 'uuid' },
             title: { type: 'string', example: 'Summer Dress' },
             subtitle: { type: 'string', nullable: true },
-            description: { type: 'string', nullable: true },
             image: { type: 'string', nullable: true, description: 'First image URL (thumbnail)' },
             images: { type: 'array', items: { type: 'string' }, description: 'All image URLs in display order (first = top)' },
+            descriptions: {
+              type: 'array',
+              description: 'Multiple description blocks. Each has optional title and required description. If only one, title can be omitted.',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  title: { type: 'string', nullable: true, description: 'Optional section title (e.g. "Materials")' },
+                  description: { type: 'string', description: 'Description text' },
+                },
+              },
+            },
+            productOptions: {
+              type: 'array',
+              description: 'Optional custom options per product (e.g. Box Color: red, blue, black; Flower Color: orange, red, blue). Each item has title and options array.',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', format: 'uuid' },
+                  title: { type: 'string', example: 'Box Color' },
+                  options: { type: 'array', items: { type: 'string' }, example: ['red', 'blue', 'black'] },
+                },
+              },
+            },
             price: { type: 'number', format: 'float', example: 49.99 },
             discountedPrice: { type: 'number', format: 'float', nullable: true, example: 39.99 },
+            quantity: { type: 'integer', example: 10, description: 'Stock quantity (admin tracking)' },
             categoryId: { type: 'string', format: 'uuid', nullable: true },
             category: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' } } },
             createdAt: { type: 'string', format: 'date-time' },
@@ -266,9 +292,21 @@ const options = {
           properties: {
             title: { type: 'string', example: 'Summer Dress' },
             subtitle: { type: 'string', example: 'Light cotton' },
-            description: { type: 'string' },
+            descriptions: {
+              type: 'array',
+              description: 'Multiple descriptions. Each item: title (optional), description (required). Single description needs no title.',
+              items: {
+                type: 'object',
+                required: ['description'],
+                properties: {
+                  title: { type: 'string', nullable: true, example: 'Materials' },
+                  description: { type: 'string', example: '100% cotton' },
+                },
+              },
+            },
             price: { type: 'number', example: 49.99 },
             discountedPrice: { type: 'number', nullable: true, example: 39.99 },
+            quantity: { type: 'integer', minimum: 0, example: 10, description: 'Stock quantity for admin tracking' },
             categoryId: { type: 'string', format: 'uuid', nullable: true, description: 'Optional; assign or change later via PUT /products/:id' },
             images: {
               type: 'array',
@@ -276,6 +314,18 @@ const options = {
               items: { type: 'string', format: 'uri' },
               description: 'Up to 10 image URLs in display order. First = top; reorder in app (e.g. drag 7th to 3rd) then send final order here.',
               example: ['https://cdn.example.com/1.jpg', 'https://cdn.example.com/2.jpg'],
+            },
+            productOptions: {
+              type: 'array',
+              description: 'Optional. Multiple title + options (e.g. Box Color: red, blue, black; Flower Color: orange, red, blue). Number of options per title is flexible.',
+              items: {
+                type: 'object',
+                required: ['title'],
+                properties: {
+                  title: { type: 'string', example: 'Box Color' },
+                  options: { type: 'array', items: { type: 'string' }, example: ['red', 'blue', 'black'] },
+                },
+              },
             },
           },
         },
@@ -354,6 +404,39 @@ const options = {
             meta: { type: 'object', description: 'Pagination or extra info' },
           },
         },
+        BannerImage: {
+          type: 'object',
+          description: 'Landing page banner image (display order by sortOrder)',
+          properties: {
+            id: { type: 'string', format: 'uuid', description: 'Banner ID' },
+            url: { type: 'string', description: 'Image URL (stored in DB; Bunny CDN can be used later)' },
+            sortOrder: { type: 'integer', description: 'Display order (0 = first)' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+          },
+        },
+        SectionWithItems: {
+          type: 'object',
+          description: 'Section with products and categories (same shape as product list and category list)',
+          properties: {
+            id: { type: 'string', format: 'uuid' },
+            title: { type: 'string', example: 'Ramadan Deals' },
+            image: { type: 'string', nullable: true },
+            sortOrder: { type: 'integer' },
+            createdAt: { type: 'string', format: 'date-time' },
+            updatedAt: { type: 'string', format: 'date-time' },
+            products: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/Product' },
+              description: 'Products in section (id, image, title, price, etc. as in product API)',
+            },
+            categories: {
+              type: 'array',
+              items: { $ref: '#/components/schemas/Category' },
+              description: 'Categories in section (id, title, image, totalProducts, etc.)',
+            },
+          },
+        },
       },
     },
   },
@@ -366,6 +449,8 @@ const options = {
     './src/routes/product.routes.js',
     './src/routes/cart.routes.js',
     './src/routes/order.routes.js',
+    './src/routes/banner.routes.js',
+    './src/routes/section.routes.js',
   ],
 };
 

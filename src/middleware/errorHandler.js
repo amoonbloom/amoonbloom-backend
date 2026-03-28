@@ -1,23 +1,20 @@
+const { error } = require('../utils/response');
+
 /**
  * Global error handler. Logs errors and returns consistent JSON.
- * Prisma errors (P2002, P2025) and validation/JWT status codes are mapped.
+ * Format: { success: false, message, errors? }
+ * Prisma P2002 → 409, P2025 → 404; preserves status and errors array.
  */
 function errorHandler(err, req, res, next) {
   const status = err.status || err.statusCode || 500;
   const isProd = process.env.NODE_ENV === 'production';
 
   if (err.code === 'P2002') {
-    return res.status(409).json({
-      success: false,
-      message: 'A record with this value already exists',
-    });
+    return error(res, 'A record with this value already exists', 409);
   }
 
   if (err.code === 'P2025') {
-    return res.status(404).json({
-      success: false,
-      message: 'Record not found',
-    });
+    return error(res, 'Record not found', 404);
   }
 
   if (!isProd) {
@@ -26,12 +23,7 @@ function errorHandler(err, req, res, next) {
     console.error('[ERROR]', err.message);
   }
 
-  const payload = {
-    success: false,
-    message: err.message || 'Internal Server Error',
-  };
-  if (err.errors && Array.isArray(err.errors)) payload.errors = err.errors;
-  res.status(status).json(payload);
+  return error(res, err.message || 'Internal Server Error', status, err.errors);
 }
 
 module.exports = errorHandler;

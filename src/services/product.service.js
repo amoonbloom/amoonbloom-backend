@@ -11,17 +11,74 @@ function orderedImages(product) {
   return list.map((img) => ({ url: img.url, sortOrder: img.sortOrder }));
 }
 
+function orderedDescriptions(product) {
+  const list = product.descriptions && Array.isArray(product.descriptions)
+    ? [...product.descriptions].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    : [];
+  return list.map((d) => ({
+    id: d.id,
+    title: d.title ?? null,
+    description: d.description,
+  }));
+}
+
+function orderedProductOptions(product) {
+  const list = product.productOptions && Array.isArray(product.productOptions)
+    ? [...product.productOptions].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
+    : [];
+  return list.map((o) => ({
+    id: o.id,
+    title: o.title,
+    options: Array.isArray(o.options) ? o.options : [],
+  }));
+}
+
 function mapProduct(product) {
   if (!product) return null;
-  const { price, discountedPrice, images, ...rest } = product;
+  const { price, discountedPrice, images, descriptions, productOptions, ...rest } = product;
   const imagesList = orderedImages(product);
+  const descriptionsList = orderedDescriptions(product);
+  const productOptionsList = orderedProductOptions(product);
   return {
     ...rest,
     price: decimalToNumber(price),
     discountedPrice: decimalToNumber(discountedPrice),
     images: imagesList.map((i) => i.url),
     image: imagesList[0]?.url ?? null,
+    descriptions: descriptionsList,
+    productOptions: productOptionsList,
   };
+}
+
+function normalizeDescriptions(descriptions) {
+  if (!Array.isArray(descriptions)) return [];
+  return descriptions
+    .map((d, i) => {
+      if (d == null || typeof d !== 'object') return null;
+      const text = d.description != null ? String(d.description).trim() : '';
+      if (!text) return null;
+      return {
+        title: d.title != null ? String(d.title).trim() || null : null,
+        description: text,
+        sortOrder: i,
+      };
+    })
+    .filter(Boolean);
+}
+
+function normalizeProductOptions(productOptions) {
+  if (!Array.isArray(productOptions)) return [];
+  return productOptions
+    .map((item, i) => {
+      if (item == null || typeof item !== 'object') return null;
+      const title = item.title != null ? String(item.title).trim() : '';
+      if (!title) return null;
+      const options = Array.isArray(item.options)
+        ? item.options.filter((v) => v != null && String(v).trim() !== '').map((v) => String(v).trim())
+        : [];
+      return { title, options, sortOrder: i };
+    })
+    .filter(Boolean);
 }
 
 async function createProduct(data) {
@@ -29,14 +86,18 @@ async function createProduct(data) {
   const imageUrls = Array.isArray(data.images)
     ? data.images.filter((u) => typeof u === 'string' && u.trim()).slice(0, MAX_IMAGES)
     : [];
+  const descriptionRows = normalizeDescriptions(data.descriptions);
+
+  const quantity = data.quantity != null ? Math.max(0, parseInt(data.quantity, 10) || 0) : 0;
+  const productOptionRows = normalizeProductOptions(data.productOptions);
 
   const product = await prisma.product.create({
     data: {
       title: data.title,
       subtitle: data.subtitle ?? null,
-      description: data.description ?? null,
       price: data.price,
       discountedPrice: data.discountedPrice ?? null,
+      quantity,
       ...(categoryId ? { categoryId } : {}),
       ...(imageUrls.length > 0
         ? {
@@ -45,10 +106,26 @@ async function createProduct(data) {
             },
           }
         : {}),
+      ...(descriptionRows.length > 0
+        ? {
+            descriptions: {
+              create: descriptionRows,
+            },
+          }
+        : {}),
+      ...(productOptionRows.length > 0
+        ? {
+            productOptions: {
+              create: productOptionRows,
+            },
+          }
+        : {}),
     },
     include: {
       category: { select: { id: true, title: true } },
       images: { orderBy: { sortOrder: 'asc' } },
+      descriptions: { orderBy: { sortOrder: 'asc' } },
+      productOptions: { orderBy: { sortOrder: 'asc' } },
     },
   });
   if (categoryId) {
@@ -67,9 +144,9 @@ async function updateProduct(id, data) {
   const updatePayload = {
     ...(data.title != null && { title: data.title }),
     ...(data.subtitle !== undefined && { subtitle: data.subtitle }),
-    ...(data.description !== undefined && { description: data.description }),
     ...(data.price != null && { price: data.price }),
     ...(data.discountedPrice !== undefined && { discountedPrice: data.discountedPrice }),
+    ...(data.quantity !== undefined && { quantity: Math.max(0, parseInt(data.quantity, 10) || 0) }),
     ...(data.categoryId !== undefined && { categoryId: data.categoryId || null }),
   };
 
@@ -103,11 +180,33 @@ async function updateProduct(id, data) {
     }
   }
 
+  if (data.descriptions !== undefined) {
+    await prisma.productDescription.deleteMany({ where: { productId: id } });
+    const descriptionRows = normalizeDescriptions(data.descriptions);
+    if (descriptionRows.length > 0) {
+      await prisma.productDescription.createMany({
+        data: descriptionRows.map((row) => ({ productId: id, ...row })),
+      });
+    }
+  }
+
+  if (data.productOptions !== undefined) {
+    await prisma.productOption.deleteMany({ where: { productId: id } });
+    const productOptionRows = normalizeProductOptions(data.productOptions);
+    if (productOptionRows.length > 0) {
+      await prisma.productOption.createMany({
+        data: productOptionRows.map((row) => ({ productId: id, ...row })),
+      });
+    }
+  }
+
   return prisma.product.findUnique({
     where: { id },
     include: {
       category: { select: { id: true, title: true } },
       images: { orderBy: { sortOrder: 'asc' } },
+      descriptions: { orderBy: { sortOrder: 'asc' } },
+      productOptions: { orderBy: { sortOrder: 'asc' } },
     },
   });
 }
@@ -136,6 +235,8 @@ async function getAllProducts(page = 1, limit = 10, categoryId = null) {
       include: {
         category: { select: { id: true, title: true } },
         images: { orderBy: { sortOrder: 'asc' } },
+        descriptions: { orderBy: { sortOrder: 'asc' } },
+        productOptions: { orderBy: { sortOrder: 'asc' } },
       },
     }),
     prisma.product.count({ where }),
@@ -160,6 +261,8 @@ async function getProductById(id) {
     include: {
       category: { select: { id: true, title: true } },
       images: { orderBy: { sortOrder: 'asc' } },
+      descriptions: { orderBy: { sortOrder: 'asc' } },
+      productOptions: { orderBy: { sortOrder: 'asc' } },
     },
   });
   return product ? mapProduct(product) : null;

@@ -11,9 +11,11 @@ function effectivePrice(product) {
   return discounted != null && discounted < price ? discounted : price;
 }
 
-// Product include for cart (need images for first image / display)
+// Product include for cart (images + descriptions + productOptions for display)
 const cartProductInclude = {
   images: { orderBy: { sortOrder: 'asc' } },
+  descriptions: { orderBy: { sortOrder: 'asc' } },
+  productOptions: { orderBy: { sortOrder: 'asc' } },
 };
 
 async function getOrCreateCart(userId) {

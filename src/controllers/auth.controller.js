@@ -476,7 +476,7 @@ const getProfile = async (req, res, next) => {
       return error(res, 'User not found', 404);
     }
 
-    return success(res, user, undefined, 200);
+    return success(res, user, 'Profile fetched successfully', 200);
   } catch (err) {
     next(err);
   }
@@ -580,7 +580,7 @@ const getMe = async (req, res, next) => {
       hasPassword: !!password,
       isGoogleUser: !!googleId,
       isAppleUser: !!appleId,
-    }, undefined, 200);
+    }, 'User profile fetched successfully', 200);
   } catch (err) {
     next(err);
   }
