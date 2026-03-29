@@ -32,3 +32,42 @@ Or run seed manually: `railway run npm run seed` (or a one-off job).
 1. Open **Deploy logs** and confirm you see `[STARTUP] Starting Node.js server...` and `[SERVER] Server running on port ...`.
 2. If the process exits earlier, check **migrate** errors (database URL, network) or missing **`JWT_SECRET`**.
 3. Do **not** set `internalPort` in `railway.toml` to a value that disagrees with Railway’s **`PORT`** (see repo `railway.toml` comments).
+
+## Error P3009 — “failed migrations in the target database”
+
+**What it means:** A migration (often `20260316000000_ecommerce_entities`) **started** on Postgres but Prisma recorded it as **failed**. Until that row is resolved, **`prisma migrate deploy` will refuse to run** (your container restarts forever on migrate).
+
+**Typical causes:** network blip to the DB proxy, statement timeout, or the process dying mid-migration. The database may be either **empty** for that migration (transaction rolled back) or **fully applied** (objects exist but Prisma still shows “failed”).
+
+### Fix (one-time, from your machine)
+
+1. Install [Railway CLI](https://docs.railway.com/guides/cli) and link the project, **or** copy **`DATABASE_URL`** from the Railway Postgres service (same DB the app uses).
+
+2. From the **repo root**, with `DATABASE_URL` set to that Railway URL:
+
+   ```bash
+   npm run migrate:fix-p3009
+   npx prisma migrate deploy
+   ```
+
+   The script checks whether the six ecommerce tables (`Category`, `Product`, `Cart`, `CartItem`, `Order`, `OrderItem`) exist:
+
+   - **All present** → runs `prisma migrate resolve --applied 20260316000000_ecommerce_entities` so Prisma marks that migration as done, then you run **`migrate deploy`** to apply any later migrations.
+   - **None present** → runs `prisma migrate resolve --rolled-back …` so Prisma clears the failed state; then **`migrate deploy`** will **re-apply** that migration from scratch.
+   - **Some but not all** → the script exits with an error; treat the DB as inconsistent (backup / manual SQL / support).
+
+3. Redeploy the app on Railway (or push an empty commit) so `start.sh` runs **`migrate deploy`** successfully.
+
+**Railway one-off (if you use the CLI):**
+
+```bash
+railway run npm run migrate:fix-p3009
+railway run npx prisma migrate deploy
+```
+
+### Manual alternative (no script)
+
+- If tables **exist**: `npx prisma migrate resolve --applied 20260316000000_ecommerce_entities`
+- If tables **do not** exist: `npx prisma migrate resolve --rolled-back 20260316000000_ecommerce_entities`
+
+Then run `npx prisma migrate deploy` again. See [Prisma: production troubleshooting](https://www.prisma.io/docs/guides/migrate/production-troubleshooting).
