@@ -1,9 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || 'localhost';
-const baseUrl = `http://${HOST}:${PORT}`;
-
 const options = {
   definition: {
     openapi: '3.0.0',
@@ -13,7 +9,10 @@ const options = {
       description: 'Ecommerce API: Auth, User Profile, Users, Categories, Products, Cart, Orders, Upload. All routes are under `/api/v1` or `/api`. Use **Authorize** with the JWT from signin for protected endpoints.',
     },
     servers: [
-      { url: `${baseUrl}/api/v1`, description: 'API v1 (all routes)' },
+      // Use relative URL so Swagger works both locally and on hosted environments
+      // (same-origin as the docs host). This fixes “Failed to fetch” due to
+      // localhost being embedded in production.
+      { url: '/api/v1', description: 'API v1 (all routes)' },
     ],
     tags: [
       { name: 'Auth', description: 'Signup, login, Google OAuth, password reset, get/update user by ID' },
