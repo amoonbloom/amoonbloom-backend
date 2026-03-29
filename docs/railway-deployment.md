@@ -72,3 +72,11 @@ railway run npx prisma migrate deploy
 - If tables **do not** exist: `npx prisma migrate resolve --rolled-back 20260316000000_ecommerce_entities`
 
 Then run `npx prisma migrate deploy` again. See [Prisma: production troubleshooting](https://www.prisma.io/docs/guides/migrate/production-troubleshooting).
+
+## Error P3018 — `string contains embedded null`
+
+**Cause:** A migration SQL file was saved as **UTF-16** (e.g. from some Windows editors). PostgreSQL rejects query strings that contain **NUL bytes**, which appear between ASCII characters in UTF-16.
+
+**Fix in this repo:** `20260316000000_ecommerce_entities/migration.sql` was converted to **UTF-8** without embedded nulls. Redeploy after pulling latest `main`.
+
+If you add migrations on Windows, save `migration.sql` as **UTF-8** (in VS Code: bottom-right encoding → “Save with Encoding” → UTF-8).
