@@ -39,6 +39,16 @@ async function getMigrationRow(client) {
   return r.rows[0] || null;
 }
 
+async function migrationsTableExists(client) {
+  const r = await client.query(
+    `SELECT EXISTS (
+      SELECT 1 FROM information_schema.tables
+      WHERE table_schema = 'public' AND table_name = '_prisma_migrations'
+    ) AS x`
+  );
+  return r.rows[0].x === true;
+}
+
 async function main() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -52,10 +62,16 @@ async function main() {
   let exists;
   let migrationRow;
   try {
+    const hasTable = await migrationsTableExists(client);
+    if (!hasTable) {
+      console.log('[fix-p3009] No _prisma_migrations table yet — fresh DB, skipping.');
+      process.exit(0);
+    }
+
     migrationRow = await getMigrationRow(client);
     if (!migrationRow) {
-      console.error(`[fix-p3009] No row for ${MIGRATION_NAME} in _prisma_migrations. Use prisma migrate deploy first.`);
-      process.exit(1);
+      console.log(`[fix-p3009] No row for ${MIGRATION_NAME} — migration not started or not yet recorded. Nothing to fix.`);
+      process.exit(0);
     }
 
     if (migrationRow.finished_at != null) {

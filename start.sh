@@ -1,6 +1,10 @@
 #!/bin/sh
 set -e
 
+# Clear Prisma P3009 if `20260316000000_ecommerce_entities` is stuck as "failed" (must run before migrate deploy).
+echo "[STARTUP] P3009 auto-fix check (ecommerce migration)..."
+node scripts/fix-p3009-ecommerce-migration.js
+
 echo "[STARTUP] Running database migrations..."
 npx prisma migrate deploy
 

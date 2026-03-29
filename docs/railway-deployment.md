@@ -17,9 +17,10 @@ The deploy healthcheck uses **`GET /`**, which returns JSON with `"status": "hea
 
 ## Startup sequence (`start.sh`)
 
-1. `npx prisma migrate deploy`
-2. Optional: `node prisma/seed.js` only if **`RUN_SEED=true`**
-3. `node server.js`
+1. **`node scripts/fix-p3009-ecommerce-migration.js`** — clears stuck Prisma **P3009** for `20260316000000_ecommerce_entities` when needed (no-op otherwise).
+2. `npx prisma migrate deploy`
+3. Optional: `node prisma/seed.js` only if **`RUN_SEED=true`**
+4. `node server.js`
 
 Seeding is **off by default** so deploys start faster and are less likely to fail before the server listens. For a **first** environment, enable seed once:
 
