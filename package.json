@@ -4,7 +4,7 @@
   "description": "Ecommerce backend starter - Express, Prisma, PostgreSQL",
   "main": "server.js",
   "scripts": {
-    "start": "prisma migrate deploy && node prisma/seed.js && node server.js",
+    "start": "prisma migrate deploy && node server.js",
     "seed": "node prisma/seed.js",
     "dev": "nodemon server.js",
     "build": "prisma generate",
@@ -12,7 +12,8 @@
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
-    "e2e": "node scripts/e2e-test.js"
+    "e2e": "node scripts/e2e-test.js",
+    "kill-port-5000": "powershell -ExecutionPolicy Bypass -File scripts/kill-port-5000.ps1"
   },
   "keywords": [
     "express",

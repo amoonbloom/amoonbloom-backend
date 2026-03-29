@@ -27,10 +27,10 @@ COPY . .
 # Make startup script executable
 RUN chmod +x start.sh
 
-# Environment variables
+# Defaults; Railway overrides PORT at runtime — server.js must listen on process.env.PORT
 ENV NODE_ENV=production
 ENV PORT=3000
-EXPOSE $PORT
+EXPOSE 3000
 
 # Default command (overridden by railway.toml)
 CMD ["sh", "start.sh"]

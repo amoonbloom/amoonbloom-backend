@@ -9,5 +9,5 @@ healthcheckTimeout = 300
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
 
-[service]
-internalPort = 3000
+# Do not hardcode internalPort: Railway sets PORT at runtime; the app listens on process.env.PORT.
+# A fixed internalPort (e.g. 3000) can mismatch PORT (e.g. 8080) and cause 503 / healthcheck failures.
