@@ -1,9 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 
-const PORT = process.env.PORT || 5000;
-const HOST = process.env.HOST || 'localhost';
-const baseUrl = `http://${HOST}:${PORT}`;
-
 const options = {
   definition: {
     openapi: '3.0.0',
@@ -12,8 +8,9 @@ const options = {
       version: '1.0.0',
       description: 'Ecommerce API: Auth, User Profile, Users, Categories, Products, Cart, Orders, Upload. All routes are under `/api/v1` or `/api`. Use **Authorize** with the JWT from signin for protected endpoints.',
     },
+    // Relative URL: Swagger “Try it out” uses the same host as the page (localhost, LAN IP, or production).
     servers: [
-      { url: `${baseUrl}/api/v1`, description: 'API v1 (all routes)' },
+      { url: '/api/v1', description: 'API v1 (all routes)' },
     ],
     tags: [
       { name: 'Auth', description: 'Signup, login, Google OAuth, password reset, get/update user by ID' },
