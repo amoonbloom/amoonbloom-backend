@@ -9,10 +9,8 @@ const options = {
       description:
         'Ecommerce API for Amoonis Boutique. Use **Authorize** in this page and paste your JWT after signing in. Base URL: **/api/v1** (or **/api**). Managers get **managerPermissions** in the sign-in response for dashboard routing.',
     },
+    // Relative URL: Swagger “Try it out” uses the same host as the page (localhost, LAN IP, or production).
     servers: [
-      // Use relative URL so Swagger works both locally and on hosted environments
-      // (same-origin as the docs host). This fixes “Failed to fetch” due to
-      // localhost being embedded in production.
       { url: '/api/v1', description: 'API v1 (all routes)' },
     ],
     tags: [
