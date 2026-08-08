@@ -69,7 +69,7 @@ function formatVariant(selectedOptions) {
  * @returns {Promise<{ error: string } | { error: null, summary: object, orderRows: object[], itemRows: object[], filtersApplied: object }>}
  */
 async function getOrdersForExport(filters = {}) {
-  const { dateFrom, dateTo, status, paymentStatus, regionCode } = filters;
+  const { dateFrom, dateTo, status, paymentStatus, regionCode, regionIds } = filters;
 
   if (!dateFrom || !dateTo) {
     return { error: 'dateFrom and dateTo are required' };
@@ -90,7 +90,12 @@ async function getOrdersForExport(filters = {}) {
     ...(paymentStatus ? { paymentStatus } : {}),
   };
 
-  if (regionCode) {
+  // `regionIds` (already scope-resolved by the controller) wins when present: null
+  // = all regions, [id] = one region, [a,b] = a manager's regions. Falls back to
+  // resolving the raw ?region code when the caller passed no scoped filter.
+  if (Array.isArray(regionIds)) {
+    where.regionId = { in: regionIds };
+  } else if (regionCode) {
     const region = await regionService.getRegionByCode(regionCode);
     where.regionId = region ? region.id : '00000000-0000-0000-0000-000000000000';
   }

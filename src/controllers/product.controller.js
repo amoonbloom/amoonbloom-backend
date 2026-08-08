@@ -2,9 +2,11 @@ const productService = require('../services/product.service');
 const sectionService = require('../services/section.service');
 const { success, error } = require('../utils/response');
 const { visibilityFromReq } = require('../utils/visibilityFromReq');
+const { guardCreate, guardMutate } = require('../utils/catalogRegionGuard');
 
 async function createProduct(req, res, next) {
   try {
+    if (guardCreate(res, req, req.body)) return;
     const product = await productService.createProduct(req.body);
     const data = productService.mapProduct(product);
     return success(res, data, 'Product created successfully', 201);
@@ -20,6 +22,7 @@ async function createProduct(req, res, next) {
 async function updateProduct(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'product', id, { submittedRegionIds: req.body.regionIds })).blocked) return;
     const product = await productService.updateProduct(id, req.body);
     if (!product) return error(res, 'Product not found', 404);
     const data = productService.mapProduct(product);
@@ -38,6 +41,7 @@ async function updateProduct(req, res, next) {
 async function deleteProduct(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'product', id)).blocked) return;
     const product = await productService.deleteProduct(id);
     if (!product) return error(res, 'Product not found', 404);
     return success(res, null, 'Product deleted successfully');

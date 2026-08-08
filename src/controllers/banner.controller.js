@@ -1,6 +1,7 @@
 const bannerService = require('../services/banner.service');
 const { success, error } = require('../utils/response');
 const { visibilityFromReq } = require('../utils/visibilityFromReq');
+const { guardCreate, guardMutate } = require('../utils/catalogRegionGuard');
 
 function parsePlatform(value) {
   if (value === undefined || value === null) return null;
@@ -38,6 +39,9 @@ async function getBanners(req, res, next) {
  */
 async function addBanners(req, res, next) {
   try {
+    // Region-scoped managers may only add banners for their region(s); guardCreate
+    // also defaults regionIds to their scope when they choose none.
+    if (guardCreate(res, req, req.body)) return;
     const { url, urls, status, regionIds, platform } = req.body;
     const toAdd = url != null ? [url] : Array.isArray(urls) ? urls : [];
     if (toAdd.length === 0) {
@@ -61,6 +65,7 @@ async function addBanners(req, res, next) {
 async function updateBanner(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'banner', id, { submittedRegionIds: req.body.regionIds })).blocked) return;
     const banner = await bannerService.updateBanner(id, req.body);
     if (!banner) return error(res, 'Banner not found', 404);
     return success(res, banner, 'Banner updated successfully', 200);
@@ -96,6 +101,7 @@ async function updateOrder(req, res, next) {
 async function deleteBanner(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'banner', id)).blocked) return;
     await bannerService.deleteBanner(id);
     const items = await bannerService.getBanners();
     return success(res, items, 'Banner deleted successfully', 200, { total: items.length });

@@ -2,13 +2,16 @@ const { success, error } = require('../utils/response');
 const prisma = require('../config/db');
 const cashArrangementService = require('../services/cashArrangement.service');
 const deliveryZoneService = require('../services/deliveryZone.service');
+const { isRegionAllowed, assertRegionAllowed } = require('../utils/regionScope');
 
 // ============================================
 // GET /api/cash-arrangement  (admin) — every region + its enablement config
 // ============================================
 const listConfigs = async (req, res, next) => {
   try {
-    const configs = await cashArrangementService.listConfigs();
+    let configs = await cashArrangementService.listConfigs();
+    // Region-scoped managers only see cash-arrangement config for their region(s).
+    configs = configs.filter((c) => isRegionAllowed(req, c.regionId ?? c.region?.id ?? null));
     return success(res, configs, 'Cash arrangement configs fetched successfully', 200, { total: configs.length });
   } catch (err) {
     next(err);
@@ -35,6 +38,7 @@ const getPublicCashArrangementConfig = async (req, res, next) => {
 // ============================================
 const getCashArrangementConfig = async (req, res, next) => {
   try {
+    if (assertRegionAllowed(res, req, req.params.regionId, { hideAsNotFound: true })) return;
     const config = await cashArrangementService.getConfig(req.params.regionId);
     return success(res, config, 'Cash arrangement config fetched successfully');
   } catch (err) {
@@ -51,6 +55,7 @@ const getCashArrangementConfig = async (req, res, next) => {
 // ============================================
 const updateCashArrangementConfig = async (req, res, next) => {
   try {
+    if (assertRegionAllowed(res, req, req.params.regionId)) return;
     const { enabled, appliesTo, productIds, categoryIds, quickPickAmounts, denominations, feeStepAmount, feeMarginPercent } = req.body;
     const config = await cashArrangementService.updateConfig(req.params.regionId, {
       enabled,

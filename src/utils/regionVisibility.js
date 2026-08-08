@@ -15,7 +15,11 @@
  * @param {object} opts
  * @param {boolean} opts.isStaff       - true when an admin/manager token was presented
  * @param {string|null} opts.regionId  - resolved storefront region id (for non-staff)
- * @param {string|null} [opts.adminRegionId] - explicit region filter requested by staff
+ * @param {string|null} [opts.adminRegionId] - explicit single-region filter requested by staff
+ * @param {string[]|null} [opts.adminRegionIds] - region-scope filter (a region-scoped MANAGER's
+ *   allowed regions, optionally intersected with an explicit ?region). When a non-null array is
+ *   given it wins over adminRegionId: an empty array matches NOTHING (scoped-out), a populated
+ *   array matches content associated with any of the ids. See utils/regionScope.js.
  * @param {('DRAFT'|'PUBLISHED'|null)} [opts.adminStatus] - explicit status filter requested by staff
  * @param {('MOBILE'|'WEB'|null)} [opts.platform] - storefront platform filter (BannerImage only)
  * @param {('MOBILE'|'WEB'|null)} [opts.adminPlatform] - explicit platform filter requested by staff (BannerImage only)
@@ -25,7 +29,12 @@
  * a `platform` column). They are omitted by every other caller, so they never leak
  * into Product / Category / Section where clauses.
  */
-function buildVisibilityWhere({ isStaff, regionId, adminRegionId = null, adminStatus = null, platform = null, adminPlatform = null }) {
+// Sentinel region id that can never match a real join row — used so an empty
+// region-scope (a scoped manager with a foreign-region filter) narrows to zero
+// rows rather than silently widening to all regions.
+const NO_MATCH_REGION_ID = '00000000-0000-0000-0000-000000000000';
+
+function buildVisibilityWhere({ isStaff, regionId, adminRegionId = null, adminRegionIds = null, adminStatus = null, platform = null, adminPlatform = null }) {
   const where = {};
 
   if (!isStaff) {
@@ -35,9 +44,18 @@ function buildVisibilityWhere({ isStaff, regionId, adminRegionId = null, adminSt
     return where;
   }
 
-  // Staff: unfiltered unless they explicitly asked to narrow the view.
+  // Staff: unfiltered unless they explicitly asked to narrow the view, OR they are a
+  // region-scoped manager (adminRegionIds is a non-null array).
   if (adminStatus === 'DRAFT' || adminStatus === 'PUBLISHED') where.status = adminStatus;
-  if (adminRegionId) where.regions = { some: { regionId: adminRegionId } };
+  if (Array.isArray(adminRegionIds)) {
+    // Overlap match: content associated with ANY allowed region. Empty array (foreign
+    // filter / scoped-out) => a sentinel that matches nothing.
+    where.regions = adminRegionIds.length
+      ? { some: { regionId: { in: adminRegionIds } } }
+      : { some: { regionId: NO_MATCH_REGION_ID } };
+  } else if (adminRegionId) {
+    where.regions = { some: { regionId: adminRegionId } };
+  }
   if (adminPlatform) where.platform = adminPlatform;
   return where;
 }

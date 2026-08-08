@@ -44,6 +44,9 @@ async function attachStaffIfPresent(req, res, next) {
       req.isStaff = true;
       req.isManager = true;
       req.managerPermissions = user.managerPermissions || [];
+      // Region access-scope (empty => all regions). Lets visibilityFromReq scope a
+      // manager's catalog reads to their regions — see utils/regionScope.js.
+      req.managerRegionIds = (user.managedRegions || []).map((r) => r.regionId);
     }
     return next();
   } catch (err) {

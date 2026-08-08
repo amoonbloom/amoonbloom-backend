@@ -128,6 +128,7 @@ model Region {
   sections      SectionRegion[]
   promoCodes    PromoCodeRegion[]
   users         User[]
+  managerScopes ManagerRegion[]
   orders        Order[]
   vatConfig             VatConfig?
   cashArrangementConfig CashArrangementConfig?
@@ -378,6 +379,30 @@ model User {
 
   region Region? @relation(fields: [regionId], references: [id], onDelete: SetNull)
 
+  /// Regions a MANAGER account is scoped to for admin access. An EMPTY set means
+  /// "all regions" (a super-manager, still limited by managerPermissions). ADMIN
+  /// accounts ignore this entirely — they are always all-region. Distinct from the
+  /// `regionId` above, which is the region the account itself *belongs to* (a
+  /// customer's browsing default). See src/utils/regionScope.js.
+  managedRegions  ManagerRegion[]
+
+  @@index([regionId])
+}
+
+/// Access-control scope for MANAGER accounts: the set of regions a manager may
+/// see and act on across the admin surface (orders, analytics, catalog,
+/// per-region config, customers, broadcasts). A manager with NO rows here is
+/// unscoped (all regions). Mirrors the ProductRegion / CategoryRegion join-table
+/// pattern; cascades on both sides so deleting a user or a region cleans up.
+model ManagerRegion {
+  userId    String
+  regionId  String
+  createdAt DateTime @default(now())
+
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  region Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@id([userId, regionId])
   @@index([regionId])
 }
 

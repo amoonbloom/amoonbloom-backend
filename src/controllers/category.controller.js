@@ -1,9 +1,11 @@
 const categoryService = require('../services/category.service');
 const { success, error } = require('../utils/response');
 const { visibilityFromReq } = require('../utils/visibilityFromReq');
+const { guardCreate, guardMutate } = require('../utils/catalogRegionGuard');
 
 async function createCategory(req, res, next) {
   try {
+    if (guardCreate(res, req, req.body)) return;
     const category = await categoryService.createCategory(req.body);
     return success(res, category, 'Category created successfully', 201);
   } catch (err) {
@@ -19,6 +21,7 @@ async function createCategory(req, res, next) {
 async function updateCategory(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'category', id, { submittedRegionIds: req.body.regionIds })).blocked) return;
     const category = await categoryService.updateCategory(id, req.body);
     return success(res, category, 'Category updated successfully');
   } catch (err) {
@@ -33,6 +36,7 @@ async function updateCategory(req, res, next) {
 async function deleteCategory(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'category', id)).blocked) return;
     await categoryService.deleteCategory(id);
     return success(res, null, 'Category deleted successfully');
   } catch (err) {

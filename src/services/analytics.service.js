@@ -7,22 +7,42 @@ const regionService = require('./region.service');
 const NO_MATCH_REGION_ID = '00000000-0000-0000-0000-000000000000';
 
 /**
- * Resolve an optional region filter (a region code in params.region) onto the range.
- * No region param => combined ("both / mixed") view across all regions.
+ * Resolve an optional region filter (a region code in params.region) onto the range,
+ * constrained by the caller's access scope (params.regionScope: null = unrestricted,
+ * or a MANAGER's allowed region-id array).
+ *
+ * - No region code + unrestricted  => combined view across ALL regions.
+ * - No region code + scoped manager => combined view across the manager's regions only.
+ * - Explicit code in scope          => that single region.
+ * - Explicit code out of scope      => zero rows (a scoped manager can't peek at another region).
  */
 async function attachRegionFilter(range, params) {
+  const scope = Array.isArray(params && params.regionScope) ? params.regionScope : null;
   const code = params && params.region ? String(params.region).trim() : '';
+
   if (!code) {
-    // No region filter -> combined view across regions with mixed currencies;
-    // callers fall back to the store's configured Settings.currency.
     range.regionId = null;
     range.regionCode = null;
+    // Scoped manager with no explicit region -> combine across THEIR regions only.
+    range.regionIds = scope;
+    // Combined view spans mixed currencies -> callers fall back to Settings.currency.
     range.currency = null;
     return range;
   }
+
   const region = await regionService.getRegionByCode(code);
-  range.regionId = region ? region.id : NO_MATCH_REGION_ID;
+  const resolvedId = region ? region.id : NO_MATCH_REGION_ID;
+  if (scope && !scope.includes(resolvedId)) {
+    // A scoped manager asked for a region they don't manage -> match nothing.
+    range.regionId = NO_MATCH_REGION_ID;
+    range.regionCode = region ? region.code : code.toUpperCase();
+    range.regionIds = null;
+    range.currency = region?.currency || null;
+    return range;
+  }
+  range.regionId = resolvedId;
   range.regionCode = region ? region.code : code.toUpperCase();
+  range.regionIds = null;
   // A single region has one unambiguous currency â€” prefer it over the global default.
   range.currency = region?.currency || null;
   return range;
@@ -206,7 +226,10 @@ function buildOrderWhere(range, { alias = '', extra = [] } = {}) {
     conds.push(Prisma.sql`${Prisma.raw(`${prefix}"createdAt"`)} >= ${range.from}`);
     conds.push(Prisma.sql`${Prisma.raw(`${prefix}"createdAt"`)} < ${range.toExclusive}`);
   }
-  if (range.regionId) {
+  if (Array.isArray(range.regionIds) && range.regionIds.length > 0) {
+    // Region-scoped manager, combined across their regions.
+    conds.push(Prisma.sql`${Prisma.raw(`${prefix}"regionId"`)} IN (${Prisma.join(range.regionIds)})`);
+  } else if (range.regionId) {
     conds.push(Prisma.sql`${Prisma.raw(`${prefix}"regionId"`)} = ${range.regionId}`);
   }
   if (conds.length === 0) return Prisma.empty;

@@ -12,6 +12,70 @@ const {
   normalizeManagerPermissions,
   MANAGER_PERMISSION_CATALOG,
 } = require('../constants/managerPermissions');
+const regionService = require('../services/region.service');
+const { allowedRegionIds } = require('../utils/regionScope');
+
+// Prisma include that hydrates a manager's access-scope regions for transformUser.
+const MANAGED_REGIONS_INCLUDE = {
+  managedRegions: { include: { region: { select: { id: true, code: true, name: true, name_ar: true } } } },
+};
+
+/**
+ * Resolve + authorize the managedRegionIds for a manager being created/edited.
+ * - Validates the ids exist.
+ * - A region-scoped CALLER (a manager managing managers) may only grant regions
+ *   within their own scope, and may NOT create an all-region manager (that would
+ *   escalate beyond their own access) — so a non-empty subset is required.
+ * Returns { ok:true, ids } or { ok:false, message }.
+ */
+async function resolveManagedRegionIds(req, input) {
+  let ids;
+  try {
+    ids = await regionService.assertValidRegionIds(Array.isArray(input) ? input : []);
+  } catch (e) {
+    return { ok: false, message: e.message || 'Invalid region selection' };
+  }
+  const callerScope = allowedRegionIds(req); // null = admin / all-region manager
+  if (callerScope !== null) {
+    if (ids.length === 0) {
+      return { ok: false, message: 'Select at least one region within your own scope for this manager.' };
+    }
+    const foreign = ids.filter((id) => !callerScope.includes(id));
+    if (foreign.length > 0) {
+      return { ok: false, message: 'You can only assign regions within your own scope.' };
+    }
+  }
+  return { ok: true, ids };
+}
+
+/**
+ * For a region-scoped CALLER, block acting on a user outside their scope. Returns
+ * true (and sends 404 to avoid id-probing) when blocked, false to proceed.
+ * `target` must have role + regionId, and (for MANAGER targets) managedRegions loaded.
+ * ADMIN targets are handled separately by hideAdminFromManager.
+ */
+function assertUserRegionAccess(req, res, target) {
+  const scope = allowedRegionIds(req);
+  if (scope === null) return false; // admin / all-region manager
+  if (target.role === 'CUSTOMER') {
+    if (!scope.includes(target.regionId)) {
+      error(res, 'User not found', 404);
+      return true;
+    }
+    return false;
+  }
+  if (target.role === 'MANAGER') {
+    const targetRegions = (target.managedRegions || []).map((mr) => mr.regionId);
+    // An all-region manager (empty scope), or one managing any region the caller
+    // doesn't, is off-limits — a scoped manager can't touch broader/other access.
+    if (targetRegions.length === 0 || targetRegions.some((rid) => !scope.includes(rid))) {
+      error(res, 'User not found', 404);
+      return true;
+    }
+    return false;
+  }
+  return false;
+}
 
 /**
  * Row-level authorization for the Users admin section. The route middleware
@@ -90,6 +154,17 @@ const transformUser = (user) => {
     role: capitalize(user.role) || 'Customer',
     managerTitle: user.role === 'MANAGER' ? user.managerTitle || null : null,
     managerPermissions: user.role === 'MANAGER' ? user.managerPermissions || [] : [],
+    // Region access-scope (managers only). Empty array = all regions (super-manager).
+    managedRegionIds:
+      user.role === 'MANAGER'
+        ? (user.managedRegions || []).map((mr) => mr.regionId ?? mr.region?.id).filter(Boolean)
+        : [],
+    managedRegions:
+      user.role === 'MANAGER'
+        ? (user.managedRegions || [])
+            .map((mr) => mr.region && { id: mr.region.id, code: mr.region.code, name: mr.region.name, name_ar: mr.region.name_ar ?? null })
+            .filter(Boolean)
+        : [],
     status: capitalize(user.status) || 'Active',
     isEmailVerified: user.isEmailVerified,
     regionId: user.regionId || null,
@@ -150,7 +225,17 @@ const createUser = async (req, res, next) => {
       if (!norm.ok) {
         return error(res, norm.message, 400);
       }
-      managerData = { managerTitle: title, managerPermissions: norm.value };
+      // Region access-scope. Empty [] = all regions, but a region-scoped caller may
+      // not create an all-region manager (see resolveManagedRegionIds).
+      const scope = await resolveManagedRegionIds(req, req.body.managedRegionIds);
+      if (!scope.ok) return error(res, scope.message, 400);
+      managerData = {
+        managerTitle: title,
+        managerPermissions: norm.value,
+        ...(scope.ids.length > 0
+          ? { managedRegions: { create: scope.ids.map((regionId) => ({ regionId })) } }
+          : {}),
+      };
     }
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -165,6 +250,7 @@ const createUser = async (req, res, next) => {
         avatar: avatar || null,
         ...managerData,
       },
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     return success(res, transformUser(user), 'User created successfully', 201);
@@ -231,9 +317,20 @@ const getAllUsers = async (req, res, next) => {
 
     // Region filter accepts a region code (e.g. UAE) or a region id.
     if (region) {
-      const regionService = require('../services/region.service');
       const matched = await regionService.getRegionByCode(region);
       where.regionId = matched ? matched.id : NO_MATCH_REGION_ID;
+    }
+
+    // Region-scoped managers may only see CUSTOMERS who belong to one of their
+    // regions. Manager rows (the staff roster) are matched by role only — they're
+    // scoped by managedRegions, not a belonging region. Admins / all-region
+    // managers are unaffected (scope === null).
+    const scope = allowedRegionIds(req);
+    if (scope !== null) {
+      where.AND = [
+        ...(where.AND || []),
+        { OR: [{ role: { not: 'CUSTOMER' } }, { regionId: { in: scope } }] },
+      ];
     }
 
     // Build orderBy
@@ -247,7 +344,7 @@ const getAllUsers = async (req, res, next) => {
         skip,
         take,
         orderBy: { [sortField]: sortOrder },
-        include: { region: { select: { id: true, code: true, name: true, name_ar: true } } },
+        include: { region: { select: { id: true, code: true, name: true, name_ar: true } }, ...MANAGED_REGIONS_INCLUDE },
         }),
       prisma.user.count({ where }),
     ]);
@@ -277,7 +374,7 @@ const getUserById = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id },
-      include: { region: { select: { id: true, code: true, name: true, name_ar: true } } },
+      include: { region: { select: { id: true, code: true, name: true, name_ar: true } }, ...MANAGED_REGIONS_INCLUDE },
     });
 
     if (!user) {
@@ -287,6 +384,13 @@ const getUserById = async (req, res, next) => {
     if (hideAdminFromManager(req, res, user.role)) return;
     if (!canAccessRole(req, user.role)) {
       return error(res, 'You do not have permission to perform this action.', 403);
+    }
+
+    // A region-scoped manager may not open a CUSTOMER from outside their region(s) —
+    // hidden as 404 (mirrors hideAdminFromManager) so they can't probe by id.
+    const scope = allowedRegionIds(req);
+    if (scope !== null && user.role === 'CUSTOMER' && !scope.includes(user.regionId)) {
+      return error(res, 'User not found', 404);
     }
 
     return success(res, transformUser(user), 'User fetched successfully', 200);
@@ -316,6 +420,7 @@ const updateUser = async (req, res, next) => {
 
     const existingUser = await prisma.user.findUnique({
       where: { id },
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     if (!existingUser) {
@@ -332,6 +437,8 @@ const updateUser = async (req, res, next) => {
     if (!canAccessRole(req, existingUser.role)) {
       return error(res, 'You do not have permission to perform this action.', 403);
     }
+    // Region-scoped callers may only touch users within their scope.
+    if (assertUserRegionAccess(req, res, existingUser)) return;
     // Changing role: a manager needs permission over the DESTINATION role too
     // (e.g. USERS alone can't turn a customer into a manager), and can never
     // set anyone's role to ADMIN, regardless of which permissions they hold.
@@ -354,7 +461,6 @@ const updateUser = async (req, res, next) => {
 
     // Admin may reassign a user's region by regionId or region code. Empty/null clears it.
     if (req.body.regionId !== undefined || req.body.region !== undefined) {
-      const regionService = require('../services/region.service');
       const ref = req.body.regionId ?? req.body.region;
       if (!ref) {
         updateData.regionId = null;
@@ -391,9 +497,28 @@ const updateUser = async (req, res, next) => {
       }
       updateData.managerTitle = title;
       updateData.managerPermissions = perms;
+
+      // Region access-scope. Replace the manager's regions wholesale when the
+      // caller sends managedRegionIds. A region-scoped caller may only assign
+      // regions within their own scope and can never leave the manager all-region.
+      const callerScoped = allowedRegionIds(req) !== null;
+      if (req.body.managedRegionIds !== undefined) {
+        const scope = await resolveManagedRegionIds(req, req.body.managedRegionIds);
+        if (!scope.ok) return error(res, scope.message, 400);
+        updateData.managedRegions = {
+          deleteMany: {},
+          ...(scope.ids.length ? { create: scope.ids.map((regionId) => ({ regionId })) } : {}),
+        };
+      } else if (callerScoped && existingUser.role !== 'MANAGER') {
+        // Promoting a customer to manager: a scoped caller must scope them explicitly,
+        // otherwise the new manager would inherit all-region access (escalation).
+        return error(res, 'Select at least one region within your own scope for this manager.', 400);
+      }
     } else {
       updateData.managerTitle = null;
       updateData.managerPermissions = [];
+      // Leaving the manager role clears the access-scope rows too.
+      updateData.managedRegions = { deleteMany: {} };
     }
 
     if (role) {
@@ -403,6 +528,7 @@ const updateUser = async (req, res, next) => {
     const user = await prisma.user.update({
       where: { id },
       data: updateData,
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     // Privilege-relevant fields (role/status/managerPermissions) may have changed —
@@ -426,6 +552,7 @@ const deleteUser = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id },
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     if (!user) {
@@ -439,6 +566,7 @@ const deleteUser = async (req, res, next) => {
     if (!canAccessRole(req, user.role)) {
       return error(res, 'You do not have permission to perform this action.', 403);
     }
+    if (assertUserRegionAccess(req, res, user)) return;
 
     await prisma.user.delete({
       where: { id },
@@ -462,6 +590,7 @@ const toggleUserStatus = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id },
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     if (!user) {
@@ -472,6 +601,7 @@ const toggleUserStatus = async (req, res, next) => {
     if (!canAccessRole(req, user.role)) {
       return error(res, 'You do not have permission to perform this action.', 403);
     }
+    if (assertUserRegionAccess(req, res, user)) return;
 
     const newStatus = status
       ? status.toUpperCase()
@@ -515,6 +645,7 @@ const changeUserRole = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id },
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     if (!user) {
@@ -525,6 +656,7 @@ const changeUserRole = async (req, res, next) => {
     if (!canAccessRole(req, user.role)) {
       return error(res, 'You do not have permission to perform this action.', 403);
     }
+    if (assertUserRegionAccess(req, res, user)) return;
     // Changing role: a manager needs permission over the DESTINATION role too,
     // and can never set anyone's role to ADMIN, regardless of permissions held.
     if (upper !== user.role && !canAccessRole(req, upper)) {
@@ -544,14 +676,30 @@ const changeUserRole = async (req, res, next) => {
       }
       data.managerTitle = title;
       data.managerPermissions = norm.value;
+
+      // Region access-scope (optional). A scoped caller must scope the manager
+      // within their own regions and can never promote to an all-region manager.
+      const callerScoped = allowedRegionIds(req) !== null;
+      if (req.body.managedRegionIds !== undefined) {
+        const scope = await resolveManagedRegionIds(req, req.body.managedRegionIds);
+        if (!scope.ok) return error(res, scope.message, 400);
+        data.managedRegions = {
+          deleteMany: {},
+          ...(scope.ids.length ? { create: scope.ids.map((regionId) => ({ regionId })) } : {}),
+        };
+      } else if (callerScoped && user.role !== 'MANAGER') {
+        return error(res, 'Select at least one region within your own scope for this manager.', 400);
+      }
     } else {
       data.managerTitle = null;
       data.managerPermissions = [];
+      data.managedRegions = { deleteMany: {} };
     }
 
     const updatedUser = await prisma.user.update({
       where: { id },
       data,
+      include: MANAGED_REGIONS_INCLUDE,
     });
 
     // Role/managerPermissions changed — drop the cached auth entry so it takes
@@ -580,12 +728,20 @@ const getUserStats = async (req, res, next) => {
     const canSeeCustomers = !allowedRoles || allowedRoles.includes('CUSTOMER');
     const canSeeManagers = !allowedRoles || allowedRoles.includes('MANAGER');
     const canSeeAdmins = !!req.isAdmin;
+
+    // Region scope: a region-scoped manager only counts CUSTOMERS in their region(s);
+    // manager rows (staff) are counted by role only. Mirrors getAllUsers.
+    const regionScope = allowedRegionIds(req);
+    const customerRegionWhere = regionScope !== null ? { regionId: { in: regionScope } } : {};
     const scopeWhere = allowedRoles ? { role: { in: allowedRoles } } : {};
+    if (regionScope !== null) {
+      scopeWhere.AND = [{ OR: [{ role: { not: 'CUSTOMER' } }, { regionId: { in: regionScope } }] }];
+    }
 
     const [totalUsers, customers, admins, managers, activeUsers, inactiveUsers] =
       await Promise.all([
         prisma.user.count({ where: scopeWhere }),
-        canSeeCustomers ? prisma.user.count({ where: { role: 'CUSTOMER' } }) : Promise.resolve(0),
+        canSeeCustomers ? prisma.user.count({ where: { role: 'CUSTOMER', ...customerRegionWhere } }) : Promise.resolve(0),
         canSeeAdmins ? prisma.user.count({ where: { role: 'ADMIN' } }) : Promise.resolve(0),
         canSeeManagers ? prisma.user.count({ where: { role: 'MANAGER' } }) : Promise.resolve(0),
         prisma.user.count({ where: { ...scopeWhere, status: 'ACTIVE' } }),

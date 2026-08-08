@@ -711,6 +711,8 @@ const getProfile = async (req, res, next) => {
         phone: true,
         regionId: true,
         region: { select: { id: true, code: true, name: true, name_ar: true } },
+        // Region access-scope for the admin panel to auto-scope a manager's views.
+        managedRegions: { include: { region: { select: { id: true, code: true, name: true, name_ar: true } } } },
         addressCountry: true,
         addressCity: true,
         createdAt: true,
@@ -722,7 +724,16 @@ const getProfile = async (req, res, next) => {
       return error(res, 'User not found', 404);
     }
 
-    return success(res, user, 'Profile fetched successfully', 200);
+    // Flatten the join rows into id + resolved region lists the frontend can bind to.
+    // Empty for admins / all-region managers (they see every region).
+    const managedRegions = (user.managedRegions || []).map((mr) => mr.region).filter(Boolean);
+    const shaped = {
+      ...user,
+      managedRegions,
+      managedRegionIds: managedRegions.map((r) => r.id),
+    };
+
+    return success(res, shaped, 'Profile fetched successfully', 200);
   } catch (err) {
     next(err);
   }

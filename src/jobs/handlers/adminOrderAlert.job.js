@@ -3,9 +3,11 @@
  *
  * Data: { orderId, orderNumber?, totalAmount?, currency?, buyerId? }
  *
- * Recipients: every active ADMIN, plus MANAGERs who hold the `ORDERS` permission —
- * managers without it can't open the order screen, so alerting them would be noise that
- * deep-links into a screen they can't access.
+ * Recipients: every active ADMIN, plus MANAGERs who hold the `ORDERS` permission AND
+ * are allowed to see this order's region — an all-region manager (no ManagerRegion
+ * rows) or one who manages the order's region. A region-scoped manager never gets
+ * alerts (or a deep-link they'd 404 on) for another region's orders. Managers
+ * without ORDERS can't open the order screen, so alerting them would be noise.
  *
  * Fans out one push.send job per recipient. These are OPERATIONAL alerts (prefKey: null)
  * so they bypass the staff member's personal customer notification preferences — an admin
@@ -35,13 +37,28 @@ async function handle(data) {
   // legacy order placed before order numbers existed.
   const ref = orderNumber != null ? `#${orderNumber}` : `#${shortRef(orderId)}`;
 
+  // The order's region drives which managers may be alerted. Prefer the value passed
+  // in the job data; fall back to reading the order so older enqueues still scope.
+  let orderRegionId = data.regionId;
+  if (orderRegionId === undefined) {
+    const ord = await prisma.order.findUnique({ where: { id: orderId }, select: { regionId: true } });
+    orderRegionId = ord?.regionId ?? null;
+  }
+
+  // ORDERS managers who may see this region: all-region (no ManagerRegion rows) OR
+  // managing the order's region. When the order has no region (legacy), only
+  // all-region managers qualify (a scoped manager can't be tied to a null region).
+  const managerRegionClause = orderRegionId
+    ? { OR: [{ managedRegions: { none: {} } }, { managedRegions: { some: { regionId: orderRegionId } } }] }
+    : { managedRegions: { none: {} } };
+
   const staff = await prisma.user.findMany({
     where: {
       status: 'ACTIVE',
       ...(buyerId ? { id: { not: buyerId } } : {}),
       OR: [
         { role: 'ADMIN' },
-        { role: 'MANAGER', managerPermissions: { has: 'ORDERS' } },
+        { role: 'MANAGER', managerPermissions: { has: 'ORDERS' }, ...managerRegionClause },
       ],
     },
     select: { id: true },

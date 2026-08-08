@@ -17,6 +17,7 @@
     "e2e": "node scripts/e2e-test.js",
     "test:promo": "node scripts/test-promo-codes.js",
     "test:permissions": "node scripts/manager-permissions-test.js",
+    "test:region-scope": "node scripts/test-region-scope.js",
     "test:search": "node scripts/search-verify.js",
     "test:cart": "node scripts/cart-verify.js",
     "test:custom-name-cart": "node scripts/custom-name-cart-verify.js",

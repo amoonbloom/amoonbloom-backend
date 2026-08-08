@@ -1291,6 +1291,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       orderNumber: payload.orderNumber,
       totalAmount: payload.totalAmount,
       buyerId: userId ?? null,
+      regionId: orderRegionId ?? null,
     });
     // Confirmation email: user's account email, or the guest's provided email.
     notify.orderConfirmationEmail({
@@ -1573,12 +1574,25 @@ async function getOrderById(orderId, userId = null) {
   return toOrderResponsePayload(order);
 }
 
+/**
+ * Translate a region filter into a Prisma `where` fragment. Accepts:
+ *   null / undefined -> no region filter (all regions)
+ *   'uuid'           -> exactly that region
+ *   ['a','b']        -> any of these regions (region-scoped manager)
+ *   []               -> matches NOTHING (scoped-out / foreign region requested)
+ */
+function orderRegionWhere(regionId) {
+  if (regionId == null) return {};
+  if (Array.isArray(regionId)) return { regionId: { in: regionId } };
+  return { regionId };
+}
+
 async function getAllOrdersAdmin(page = 1, limit = 10, status = null, regionId = null, deliveryType = null) {
   const skip = (Math.max(1, page) - 1) * Math.min(100, Math.max(1, limit));
   const take = Math.min(100, Math.max(1, limit));
   const where = {
     ...listStatusFilter(status),
-    ...(regionId ? { regionId } : {}),
+    ...orderRegionWhere(regionId),
     ...(deliveryType ? { deliveryType } : {}),
   };
 
@@ -1756,7 +1770,7 @@ async function getAdminOrderHistory(page = 1, limit = 10, filters = {}) {
   const where = listStatusFilter(filters.status);
 
   if (filters.userId) where.userId = filters.userId;
-  if (filters.regionId) where.regionId = filters.regionId;
+  Object.assign(where, orderRegionWhere(filters.regionId ?? null));
   if (filters.dateFrom || filters.dateTo) {
     where.createdAt = {};
     if (filters.dateFrom) where.createdAt.gte = new Date(filters.dateFrom);
@@ -1989,7 +2003,7 @@ async function getOrderStatusOnly(orderId) {
   };
 }
 
-async function updateOrderStatus(orderId, status) {
+async function updateOrderStatus(orderId, status, { allowedRegionIds = null } = {}) {
   const valid = [
     'PENDING_PAYMENT',
     'PROCESSING',
@@ -2015,9 +2029,15 @@ async function updateOrderStatus(orderId, status) {
 
         const prev = await tx.order.findUnique({
           where: { id: orderId },
-          select: { status: true, userId: true, guestEmail: true, inventoryDeducted: true },
+          select: { status: true, userId: true, guestEmail: true, inventoryDeducted: true, regionId: true },
         });
         if (!prev) return { notFound: true };
+
+        // Region-scoped managers may only mutate orders in their own region(s).
+        // allowedRegionIds null => unrestricted (admin / all-region manager).
+        if (Array.isArray(allowedRegionIds) && !allowedRegionIds.includes(prev.regionId)) {
+          return { forbidden: true };
+        }
 
         if (prev.status === status) {
           const full = await tx.order.findUnique({
@@ -2080,6 +2100,9 @@ async function updateOrderStatus(orderId, status) {
     );
 
     if (result.notFound) return null;
+    // Region-scoped manager tried to touch a foreign-region order — signal the
+    // controller to answer 403 (distinct from 404 "not found").
+    if (result.forbidden) return { forbidden: true };
     // Push/inbox fires for a guest order too (inbox row only, no device to push
     // to) — see notify.orderStatusChange.
     if (result.notify && result.notifyStatus && (result.notifyUserId || result.notifyGuestEmail)) {

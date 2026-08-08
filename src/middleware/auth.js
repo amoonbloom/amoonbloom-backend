@@ -52,6 +52,10 @@ async function loadUserForAuth(userId) {
       status: true,
       tokenVersion: true,
       managerPermissions: true,
+      // Region access-scope for MANAGER accounts (empty => all regions). Loaded
+      // here so every staff-guarded route gets it for free via the same 30s cache
+      // as managerPermissions — see utils/regionScope.js.
+      managedRegions: { select: { regionId: true } },
     },
   });
   if (!user) return null;
@@ -105,6 +109,7 @@ const verifyToken = async (req, res, next) => {
     req.userRole = user.role;
     req.userStatus = user.status;
     req.managerPermissions = user.managerPermissions || [];
+    req.managerRegionIds = (user.managedRegions || []).map((r) => r.regionId);
     next();
   } catch (err) {
     next(err);
@@ -141,6 +146,7 @@ const optionalAuth = async (req, res, next) => {
     req.userRole = user.role;
     req.userStatus = user.status;
     req.managerPermissions = user.managerPermissions || [];
+    req.managerRegionIds = (user.managedRegions || []).map((r) => r.regionId);
     return next();
   } catch {
     // Defensive: optional auth must never break the request.

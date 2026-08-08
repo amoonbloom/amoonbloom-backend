@@ -29,7 +29,14 @@ const verifyAdminOrManager = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id: decoded.id },
-      select: { id: true, role: true, status: true, tokenVersion: true, managerPermissions: true },
+      select: {
+        id: true,
+        role: true,
+        status: true,
+        tokenVersion: true,
+        managerPermissions: true,
+        managedRegions: { select: { regionId: true } },
+      },
     });
 
     if (!user) {
@@ -58,6 +65,8 @@ const verifyAdminOrManager = async (req, res, next) => {
       req.user = user;
       req.isManager = true;
       req.managerPermissions = user.managerPermissions || [];
+      // Region access-scope: empty => all regions (super-manager). See utils/regionScope.js.
+      req.managerRegionIds = (user.managedRegions || []).map((r) => r.regionId);
       return next();
     }
 
@@ -97,7 +106,12 @@ const attachOrderStaffAccess = async (req, res, next) => {
 
     const user = await prisma.user.findUnique({
       where: { id: req.userId },
-      select: { role: true, status: true, managerPermissions: true },
+      select: {
+        role: true,
+        status: true,
+        managerPermissions: true,
+        managedRegions: { select: { regionId: true } },
+      },
     });
 
     if (!user || user.status !== 'ACTIVE') {
@@ -108,7 +122,10 @@ const attachOrderStaffAccess = async (req, res, next) => {
       req.isAdmin = true;
     }
     if (user.role === 'MANAGER' && (user.managerPermissions || []).includes('ORDERS')) {
+      req.isManager = true;
       req.canViewAllOrders = true;
+      // Region scope so getOrderById can hide foreign-region orders (regionScope.js).
+      req.managerRegionIds = (user.managedRegions || []).map((r) => r.regionId);
     }
 
     next();

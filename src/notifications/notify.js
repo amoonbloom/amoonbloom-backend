@@ -50,7 +50,7 @@ function orderStatusChange({ userId, guestEmail, orderId, status } = {}) {
  * not gated by the staff member's personal notification preferences. `buyerId` is
  * excluded so an admin buying as a customer isn't notified twice.
  */
-function adminNewOrder({ orderId, orderNumber, totalAmount, currency, buyerId } = {}) {
+function adminNewOrder({ orderId, orderNumber, totalAmount, currency, buyerId, regionId } = {}) {
   if (!orderId) return Promise.resolve(null);
   return enqueue(QUEUES.ADMIN_ORDER_ALERT, {
     orderId,
@@ -58,6 +58,10 @@ function adminNewOrder({ orderId, orderNumber, totalAmount, currency, buyerId } 
     totalAmount,
     currency: currency || 'AED',
     buyerId: buyerId || null,
+    // Region drives which managers are alerted (region-scoped managers only get
+    // alerts for their own regions). Omitted when unknown -> the handler reads the
+    // order's region as a fallback. Never send null for a real region.
+    ...(regionId !== undefined ? { regionId } : {}),
   });
 }
 

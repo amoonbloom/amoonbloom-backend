@@ -2,6 +2,7 @@ const queue = require('../jobs/queue');
 const { listDefs } = require('../jobs');
 const { QUEUES } = require('../jobs/queues');
 const { success, error } = require('../utils/response');
+const { allowedRegionIds } = require('../utils/regionScope');
 
 // GET /admin/jobs — engine + per-queue status for the dashboard.
 async function status(req, res, next) {
@@ -49,6 +50,23 @@ async function broadcast(req, res, next) {
     if (!['promotion', 'announcement'].includes(kind)) {
       return error(res, "kind must be 'promotion' or 'announcement'", 400);
     }
+
+    // Region-scoped managers may only broadcast to their own region(s). A single
+    // broadcast targets one region (the fan-out filters recipients by regionId), so
+    // a scoped manager must pick one of theirs — defaulting to it when they manage
+    // exactly one. Admins / all-region managers keep the full choice (incl. "all").
+    let targetRegionId = regionId || null;
+    const scope = allowedRegionIds(req);
+    if (scope !== null) {
+      if (!targetRegionId) {
+        if (scope.length === 1) targetRegionId = scope[0];
+        else return error(res, 'Select a region to broadcast to.', 400);
+      }
+      if (!scope.includes(targetRegionId)) {
+        return error(res, 'You do not have access to this region.', 403);
+      }
+    }
+
     const localized =
       title_ar && body_ar
         ? { en: { title, body }, ar: { title: title_ar, body: body_ar } }
@@ -59,7 +77,7 @@ async function broadcast(req, res, next) {
         kind,
         ...(localized ? { localized } : { title, body }),
         data: data || {},
-        regionId: regionId || null,
+        regionId: targetRegionId,
       },
       { allowInlineFallback: false }
     );

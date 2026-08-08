@@ -7,6 +7,24 @@ const { renderOrdersPdf } = require('../services/export/orderPdf.service');
 const { renderOrdersCsv } = require('../services/export/orderCsv.service');
 const { ordersFilename } = require('../services/export/filename.util');
 const { success, error } = require('../utils/response');
+const { resolveListRegionFilter, isRegionAllowed, allowedRegionIds } = require('../utils/regionScope');
+
+// Sentinel region id that matches no row — for an unknown ?region code, so the
+// filter narrows to zero rows instead of silently widening to all regions.
+const NO_MATCH_REGION_ID = '00000000-0000-0000-0000-000000000000';
+
+// Resolve the ?region query param to a region id (or the no-match sentinel), then
+// intersect it with the caller's access scope. Returns the value to pass as the
+// service's region filter: null (all), a single id, or an array ([] = none).
+async function resolveOrdersRegionFilter(req) {
+  let requestedRegionId = null;
+  if (req.query.region) {
+    const region = await regionService.getRegionByCode(String(req.query.region));
+    requestedRegionId = region ? region.id : NO_MATCH_REGION_ID;
+  }
+  const { regionIds } = resolveListRegionFilter(req, requestedRegionId);
+  return regionIds; // null | string[] (incl. [])
+}
 
 async function createOrder(req, res, next) {
   try {
@@ -56,6 +74,13 @@ async function getOrderById(req, res, next) {
     const canViewAnyOrder = req.isAdmin === true || req.canViewAllOrders === true;
     const order = await orderService.getOrderById(id, canViewAnyOrder ? null : userId);
     if (!order) return error(res, 'Order not found', 404);
+    // A region-scoped manager may view any order only within their region(s). Their
+    // OWN orders (placed as a customer) stay visible regardless. Foreign-region orders
+    // are hidden as 404 so a scoped manager can't probe for their existence.
+    const isOwnOrder = order.userId && order.userId === userId;
+    if (!isOwnOrder && !isRegionAllowed(req, order.regionId)) {
+      return error(res, 'Order not found', 404);
+    }
     return success(res, order, 'Order fetched successfully');
   } catch (err) {
     next(err);
@@ -67,12 +92,20 @@ async function getOrderById(req, res, next) {
 async function exportOrders(req, res, next) {
   try {
     const { dateFrom, dateTo, status, paymentStatus, region, format } = req.query;
+    // Scope the export to the caller's region(s): a region-scoped manager can only
+    // export their own region's orders, even if they pass ?region for another.
+    const regionIds = await resolveOrdersRegionFilter(req);
+    if (Array.isArray(regionIds) && regionIds.length === 0) {
+      // Requested a region outside scope (or scoped-out) — nothing to export.
+      return error(res, 'You do not have access to this region.', 403);
+    }
     const result = await getOrdersForExport({
       dateFrom,
       dateTo,
       status: status || undefined,
       paymentStatus: paymentStatus || undefined,
       regionCode: region || undefined,
+      regionIds: regionIds || undefined,
     });
     if (result.error) return error(res, result.error, 400);
 
@@ -94,15 +127,12 @@ async function getAllOrdersAdmin(req, res, next) {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const status = req.query.status || null;
-    let regionId = null;
-    if (req.query.region) {
-      const region = await regionService.getRegionByCode(String(req.query.region));
-      // Unknown code -> a sentinel that matches nothing, so the filter narrows to
-      // zero rows instead of silently falling back to "all regions".
-      regionId = region ? region.id : '00000000-0000-0000-0000-000000000000';
-    }
+    // Region filter intersected with the caller's access scope: unknown ?region ->
+    // no rows; a region-scoped manager is pinned to their region(s) even if they
+    // ask for another (which yields zero rows). See utils/regionScope.js.
+    const regionIds = await resolveOrdersRegionFilter(req);
     const deliveryType = req.query.deliveryType || null;
-    const result = await orderService.getAllOrdersAdmin(page, limit, status, regionId, deliveryType);
+    const result = await orderService.getAllOrdersAdmin(page, limit, status, regionIds, deliveryType);
     return success(res, result.data, 'Orders fetched successfully', 200, {
       pagination: {
         page: result.page,
@@ -120,7 +150,15 @@ async function updateOrderStatus(req, res, next) {
   try {
     const { id } = req.params;
     const { status } = req.body;
-    const order = await orderService.updateOrderStatus(id, status);
+    // Region-scoped managers may only update orders in their region(s). null =
+    // unrestricted (admin / all-region manager). Enforced inside the service's
+    // row-locked transaction so it can't race the region check.
+    const order = await orderService.updateOrderStatus(id, status, {
+      allowedRegionIds: allowedRegionIds(req),
+    });
+    if (order && order.forbidden) {
+      return error(res, 'You do not have access to this region.', 403);
+    }
     if (!order) return error(res, 'Order not found or invalid status', 404);
     return success(res, order, 'Order status updated');
   } catch (err) {
@@ -180,16 +218,13 @@ async function getAdminOrderHistory(req, res, next) {
       return error(res, 'Invalid dateTo; use ISO 8601 date or datetime', 400);
     }
 
-    let regionId = null;
-    if (req.query.region) {
-      const region = await regionService.getRegionByCode(String(req.query.region));
-      regionId = region ? region.id : '00000000-0000-0000-0000-000000000000';
-    }
+    // Region filter intersected with the caller's access scope (see getAllOrdersAdmin).
+    const regionIds = await resolveOrdersRegionFilter(req);
 
     const result = await orderService.getAdminOrderHistory(page, limit, {
       status,
       userId,
-      regionId,
+      regionId: regionIds,
       dateFrom,
       dateTo,
       includeItems,

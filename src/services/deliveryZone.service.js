@@ -121,9 +121,12 @@ async function assertValidZone(id, regionId) {
 // ---- Admin CRUD ----
 
 async function listZones({ regionId, includeInactive = true } = {}) {
+  // regionId may be a single id, or an array (a region-scoped manager's regions).
+  const regionWhere =
+    regionId == null ? {} : { regionId: Array.isArray(regionId) ? { in: regionId } : regionId };
   return prisma.deliveryZone.findMany({
     where: {
-      ...(regionId ? { regionId } : {}),
+      ...regionWhere,
       ...(includeInactive ? {} : { isActive: true }),
     },
     orderBy: [{ regionId: 'asc' }, { sortOrder: 'asc' }],

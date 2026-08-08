@@ -397,11 +397,16 @@ async function getPromoCodeById(id) {
   return prisma.promoCode.findUnique({ where: { id }, include: DETAIL_INCLUDE });
 }
 
-async function listPromoCodes({ page = 1, limit = 10, search = null, status = null } = {}) {
+async function listPromoCodes({ page = 1, limit = 10, search = null, status = null, regionIds = null } = {}) {
   const take = Math.min(100, Math.max(1, Number(limit) || 10));
   const skip = (Math.max(1, Number(page) || 1) - 1) * take;
 
   const where = {};
+  // Region-scoped managers only see codes redeemable in at least one of their
+  // regions (overlap). null => unrestricted (admin / all-region manager).
+  if (Array.isArray(regionIds)) {
+    where.regions = { some: { regionId: { in: regionIds } } };
+  }
   if (search && String(search).trim()) {
     const q = String(search).trim();
     where.OR = [

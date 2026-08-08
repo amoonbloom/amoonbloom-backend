@@ -2,6 +2,12 @@ const prisma = require('../config/db');
 const promoCodeService = require('../services/promoCode.service');
 const productService = require('../services/product.service');
 const { success, error } = require('../utils/response');
+const { allowedRegionIds } = require('../utils/regionScope');
+
+// Region ids a promo code is redeemable in (from its loaded `regions` relation).
+function codeRegionIds(promo) {
+  return (promo?.regions || []).map((r) => r.regionId ?? r.region?.id).filter(Boolean);
+}
 
 // Fetches enough of each product row (productOptions + variants) to resolve a
 // variant-priced line's real price via productService.resolveEffectivePrice —
@@ -50,6 +56,18 @@ function handlePromoError(err, res, next) {
 
 async function createPromoCode(req, res, next) {
   try {
+    // Region-scoped managers may only create codes for their own region(s). If they
+    // don't choose regions, default to ALL their regions (never the store default,
+    // which might be a region they can't manage).
+    const allowed = allowedRegionIds(req);
+    if (allowed !== null) {
+      const requested = Array.isArray(req.body.regionIds) ? req.body.regionIds : null;
+      if (!requested || requested.length === 0) {
+        req.body.regionIds = allowed;
+      } else if (requested.some((rid) => !allowed.includes(rid))) {
+        return error(res, 'You do not have access to one or more selected regions.', 403);
+      }
+    }
     const promo = await promoCodeService.createPromoCode(req.body);
     return success(res, promoCodeService.mapPromoCode(promo), 'Promo code created successfully', 201);
   } catch (err) {
@@ -60,6 +78,23 @@ async function createPromoCode(req, res, next) {
 async function updatePromoCode(req, res, next) {
   try {
     const { id } = req.params;
+    // A scoped manager may edit a code only when ALL its regions are within their
+    // scope (editing a code shared with a foreign region could alter that region's
+    // data), and any regions they set must also be within scope.
+    const allowed = allowedRegionIds(req);
+    if (allowed !== null) {
+      const existing = await promoCodeService.getPromoCodeById(id);
+      if (!existing) return error(res, 'Promo code not found', 404);
+      if (codeRegionIds(existing).some((rid) => !allowed.includes(rid))) {
+        return error(res, 'Promo code not found', 404);
+      }
+      if (req.body.regionIds !== undefined) {
+        const requested = Array.isArray(req.body.regionIds) ? req.body.regionIds : [];
+        if (requested.some((rid) => !allowed.includes(rid))) {
+          return error(res, 'You do not have access to one or more selected regions.', 403);
+        }
+      }
+    }
     const promo = await promoCodeService.updatePromoCode(id, req.body);
     return success(res, promoCodeService.mapPromoCode(promo), 'Promo code updated successfully');
   } catch (err) {
@@ -70,6 +105,14 @@ async function updatePromoCode(req, res, next) {
 async function deletePromoCode(req, res, next) {
   try {
     const { id } = req.params;
+    const allowed = allowedRegionIds(req);
+    if (allowed !== null) {
+      const existing = await promoCodeService.getPromoCodeById(id);
+      if (!existing) return error(res, 'Promo code not found', 404);
+      if (codeRegionIds(existing).some((rid) => !allowed.includes(rid))) {
+        return error(res, 'Promo code not found', 404);
+      }
+    }
     await promoCodeService.deletePromoCode(id);
     return success(res, null, 'Promo code deleted successfully');
   } catch (err) {
@@ -86,6 +129,8 @@ async function listPromoCodes(req, res, next) {
       limit,
       search: req.query.search || null,
       status: req.query.status || null,
+      // Overlap filter: scoped managers only see codes in their region(s).
+      regionIds: allowedRegionIds(req),
     });
     return success(
       res,
@@ -111,6 +156,11 @@ async function getPromoCodeById(req, res, next) {
     const { id } = req.params;
     const promo = await promoCodeService.getPromoCodeById(id);
     if (!promo) return error(res, 'Promo code not found', 404);
+    // Overlap read: hide a code with no region in the caller's scope.
+    const allowed = allowedRegionIds(req);
+    if (allowed !== null && !codeRegionIds(promo).some((rid) => allowed.includes(rid))) {
+      return error(res, 'Promo code not found', 404);
+    }
     return success(res, promoCodeService.mapPromoCode(promo), 'Promo code fetched successfully');
   } catch (err) {
     return handlePromoError(err, res, next);

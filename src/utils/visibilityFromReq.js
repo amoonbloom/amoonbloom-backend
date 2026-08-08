@@ -12,6 +12,7 @@
  * regions by default in the panel.
  */
 const regionService = require('../services/region.service');
+const { resolveListRegionFilter } = require('./regionScope');
 
 // Sentinel id that can never match a real region row — used so an unknown admin
 // region filter returns an empty set instead of silently ignoring the filter.
@@ -38,11 +39,21 @@ async function visibilityFromReq(req) {
     const status = req.query?.status ? String(req.query.status).trim().toUpperCase() : null;
     if (status === 'DRAFT' || status === 'PUBLISHED') opts.adminStatus = status;
 
+    // An explicit ?region= narrows the admin view to one region (unknown code -> a
+    // sentinel that matches nothing). This requested region is then intersected with
+    // the caller's own access scope: an ADMIN / all-region manager gets exactly what
+    // they asked for, while a region-scoped MANAGER is pinned to their regions (and a
+    // request for a region outside their scope yields zero rows). See regionScope.js.
     const explicitCode = req.query?.region ? String(req.query.region).trim() : null;
+    let requestedRegionId = null;
     if (explicitCode) {
       const region = await regionService.getRegionByCode(explicitCode);
-      opts.adminRegionId = region ? region.id : NO_MATCH_REGION_ID;
+      requestedRegionId = region ? region.id : NO_MATCH_REGION_ID;
     }
+    const { regionIds } = resolveListRegionFilter(req, requestedRegionId);
+    // null => unrestricted with no explicit filter (leave the view unscoped). An array
+    // (including []) => pin the visibility to those regions via buildVisibilityWhere.
+    if (regionIds !== null) opts.adminRegionIds = regionIds;
   } else {
     // Storefront currency: which price a product shows (see product.service's
     // applyRegionCurrency) is driven by the requesting region's currency, resolved

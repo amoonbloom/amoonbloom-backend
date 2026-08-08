@@ -5,6 +5,7 @@ const { renderAnalyticsPdf } = require('../services/export/analyticsPdf.service'
 const { renderAnalyticsCsv } = require('../services/export/analyticsCsv.service');
 const { analyticsFilename } = require('../services/export/filename.util');
 const { success, error } = require('../utils/response');
+const { allowedRegionIds } = require('../utils/regionScope');
 
 function listPresets(req, res, next) {
   try {
@@ -32,6 +33,8 @@ async function getRevenue(req, res, next) {
         from: from || null,
         to: to || null,
         region: region || null,
+        // Constrain analytics to the caller's region scope (null = admin/all-region).
+        regionScope: allowedRegionIds(req),
       });
     } catch (e) {
       if (e.message === 'INVALID_PRESET') return error(res, 'Invalid preset', 400);
@@ -64,6 +67,8 @@ async function getKpi(req, res, next) {
         from: from || null,
         to: to || null,
         region: region || null,
+        // Constrain analytics to the caller's region scope (null = admin/all-region).
+        regionScope: allowedRegionIds(req),
       });
     } catch (e) {
       if (e.message === 'INVALID_PRESET') return error(res, 'Invalid preset', 400);
@@ -95,6 +100,8 @@ async function getCategorySales(req, res, next) {
         from: from || null,
         to: to || null,
         region: region || null,
+        // Constrain analytics to the caller's region scope (null = admin/all-region).
+        regionScope: allowedRegionIds(req),
       });
     } catch (e) {
       if (e.message === 'INVALID_PRESET') return error(res, 'Invalid preset', 400);
@@ -126,6 +133,8 @@ async function getDailySales(req, res, next) {
         from: from || null,
         to: to || null,
         region: region || null,
+        // Constrain analytics to the caller's region scope (null = admin/all-region).
+        regionScope: allowedRegionIds(req),
       });
     } catch (e) {
       if (e.message === 'INVALID_PRESET') return error(res, 'Invalid preset', 400);
@@ -160,6 +169,8 @@ async function exportAnalytics(req, res, next) {
         from: from || null,
         to: to || null,
         region: region || null,
+        // Constrain analytics to the caller's region scope (null = admin/all-region).
+        regionScope: allowedRegionIds(req),
       });
     } catch (e) {
       if (e.message === 'INVALID_PRESET') return error(res, 'Invalid preset', 400);

@@ -1,6 +1,7 @@
 const sectionService = require('../services/section.service');
 const { success, error } = require('../utils/response');
 const { visibilityFromReq } = require('../utils/visibilityFromReq');
+const { guardCreate, guardMutate } = require('../utils/catalogRegionGuard');
 
 /**
  * GET /sections – List sections for the user panel. Storefront gets PUBLISHED sections
@@ -53,6 +54,7 @@ async function getSectionEditorPreview(req, res, next) {
  */
 async function createSection(req, res, next) {
   try {
+    if (guardCreate(res, req, req.body)) return;
     const data = await sectionService.createSection(req.body);
     return success(res, data, 'Section created successfully', 201);
   } catch (err) {
@@ -72,6 +74,7 @@ async function createSection(req, res, next) {
 async function updateSection(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'section', id, { submittedRegionIds: req.body.regionIds })).blocked) return;
     const data = await sectionService.updateSection(id, req.body);
     if (!data) return error(res, 'Section not found', 404);
     return success(res, data, 'Section updated successfully', 200);
@@ -105,6 +108,7 @@ async function reorderSections(req, res, next) {
 async function deleteSection(req, res, next) {
   try {
     const { id } = req.params;
+    if ((await guardMutate(res, req, 'section', id)).blocked) return;
     await sectionService.deleteSection(id);
     return success(res, null, 'Section deleted successfully', 200);
   } catch (err) {

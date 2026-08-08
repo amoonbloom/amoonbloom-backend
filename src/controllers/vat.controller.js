@@ -1,12 +1,15 @@
 const { success, error } = require('../utils/response');
 const vatService = require('../services/vat.service');
+const { isRegionAllowed, assertRegionAllowed } = require('../utils/regionScope');
 
 // ============================================
 // GET /api/vat  (admin) — every region + its VAT config, for the region picker/overview
 // ============================================
 const listVatConfigs = async (req, res, next) => {
   try {
-    const configs = await vatService.listConfigs();
+    let configs = await vatService.listConfigs();
+    // Region-scoped managers only see VAT config for their region(s).
+    configs = configs.filter((c) => isRegionAllowed(req, c.regionId ?? c.region?.id ?? null));
     return success(res, configs, 'VAT configs fetched successfully', 200, { total: configs.length });
   } catch (err) {
     next(err);
@@ -31,6 +34,7 @@ const getPublicVatConfig = async (req, res, next) => {
 // ============================================
 const getVatConfig = async (req, res, next) => {
   try {
+    if (assertRegionAllowed(res, req, req.params.regionId, { hideAsNotFound: true })) return;
     const config = await vatService.getConfig(req.params.regionId);
     return success(res, config, 'VAT config fetched successfully');
   } catch (err) {
@@ -44,6 +48,7 @@ const getVatConfig = async (req, res, next) => {
 // ============================================
 const updateVatConfig = async (req, res, next) => {
   try {
+    if (assertRegionAllowed(res, req, req.params.regionId)) return;
     const { enabled, ratePercent, inclusive, appliesTo, productIds, categoryIds } = req.body;
     const config = await vatService.updateConfig(req.params.regionId, {
       enabled,
