@@ -52,6 +52,7 @@ const addressRoutes = require('./src/routes/address.routes');
 const notificationRoutes = require('./src/routes/notification.routes');
 const jobsRoutes = require('./src/routes/jobs.routes');
 const reviewRoutes = require('./src/routes/review.routes');
+const geoRoutes = require('./src/routes/geo.routes');
 const errorHandler = require('./src/middleware/errorHandler');
 const { startJobs, stopJobs } = require('./src/jobs');
 
@@ -174,6 +175,7 @@ v1Router.use('/user/addresses', addressRoutes);
 v1Router.use('/notifications', notificationRoutes);
 v1Router.use('/admin/jobs', jobsRoutes);
 v1Router.use('/reviews', reviewRoutes);
+v1Router.use('/geo', geoRoutes);
 
 app.use('/api/v1', v1Router);
 
