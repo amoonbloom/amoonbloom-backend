@@ -12,12 +12,22 @@
  * MYFATOORAH_CALLBACK_URL, MYFATOORAH_ERROR_URL.
  */
 
-const API_KEY = process.env.MYFATOORAH_API_KEY || '';
-const BASE_URL = (process.env.MYFATOORAH_BASE_URL || 'https://apitest.myfatoorah.com').replace(/\/+$/, '');
-const CALLBACK_URL = process.env.MYFATOORAH_CALLBACK_URL || '';
-const ERROR_URL = process.env.MYFATOORAH_ERROR_URL || '';
-const CURRENCY = process.env.MYFATOORAH_CURRENCY || 'AED';
+// .trim() every value: a stray trailing space in a Railway env var (esp. BASE_URL —
+// it becomes part of the request host and yields a 502) is otherwise silent and painful.
+const API_KEY = (process.env.MYFATOORAH_API_KEY || '').trim();
+const BASE_URL = (process.env.MYFATOORAH_BASE_URL || 'https://apitest.myfatoorah.com').trim().replace(/\/+$/, '');
+const CALLBACK_URL = (process.env.MYFATOORAH_CALLBACK_URL || '').trim();
+const ERROR_URL = (process.env.MYFATOORAH_ERROR_URL || '').trim();
+const CURRENCY = (process.env.MYFATOORAH_CURRENCY || 'AED').trim();
 const TIMEOUT_MS = Math.max(3000, parseInt(process.env.MYFATOORAH_TIMEOUT_MS || '15000', 10));
+
+// Startup visibility: which host/key the service actually resolved from env. A wrong or
+// stale MYFATOORAH_BASE_URL / MYFATOORAH_API_KEY otherwise only surfaces as an opaque
+// HTTP 500 from the gateway — this line makes it obvious in the deploy logs. The key is
+// shown as a short non-secret prefix only (enough to tell SK_ARE_… from a stale key).
+console.log(
+  `[payment] MyFatoorah config: baseUrl="${BASE_URL}" keyPrefix="${API_KEY.slice(0, 10)}" configured=${Boolean(API_KEY)}`
+);
 
 function isConfigured() {
   return Boolean(API_KEY);
@@ -71,6 +81,9 @@ async function callOnce(path, body) {
   }
 
   if (res.status >= 500) {
+    // Log the exact host+path hit — a 5xx from MyFatoorah almost always means a wrong
+    // base URL (e.g. api vs api-ae) or a stale key, and this pins down which host was called.
+    console.warn(`[payment] MyFatoorah ${res.status} from ${BASE_URL}${path} (keyPrefix="${API_KEY.slice(0, 10)}")`);
     throw gatewayError(`MyFatoorah returned HTTP ${res.status}`, { retryable: true });
   }
 
