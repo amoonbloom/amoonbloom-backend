@@ -426,10 +426,13 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // the unified resolveDeliveryLeadDays chain (product/category override → zone/region
   // standard → default), and the order takes the slowest line — see below.
 
-  // Online payment currently only works for the gateway's configured currency (AED).
-  // A region charging a different currency (e.g. Saudi/SAR) must use Cash on Delivery
-  // until a region-specific payment setup exists.
-  if (isOnlinePayment && orderCurrency !== paymentService.getConfiguredCurrency()) {
+  // Online payment is offered per region via Region.onlinePaymentEnabled (admin toggle).
+  // The gateway account is currency-scoped (e.g. an AED-only Apple Pay certificate), so a
+  // region is only turned on once its currency is confirmed chargeable — the invoice below
+  // charges the order's own currency (orderCurrency), not a fixed global one. When the
+  // region is off, MYFATOORAH is rejected here and the storefront hides the online option;
+  // Cash on Delivery still works.
+  if (isOnlinePayment && !orderRegion?.onlinePaymentEnabled) {
     return {
       order: null,
       error: 'Online payment isn’t available for this region yet — please choose Cash on Delivery.',
@@ -2139,6 +2142,7 @@ async function initiateOrderPayment(orderId, userId) {
     select: {
       id: true,
       totalAmount: true,
+      currency: true,
       status: true,
       paymentStatus: true,
       paymentMethod: true,
@@ -2210,6 +2214,7 @@ async function executeOrderPayment(orderId, userId, sessionId) {
       paymentStatus: true,
       paymentMethod: true,
       totalAmount: true,
+      currency: true,
       shippingFullName: true,
       shippingPhone: true,
       user: { select: { email: true } },

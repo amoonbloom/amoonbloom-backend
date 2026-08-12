@@ -52,6 +52,7 @@ const deliveryConfigValidation = [
   body('sameDayCutoff').optional({ nullable: true }).matches(/^([01]?\d|2[0-3]):[0-5]\d$/)
     .withMessage('sameDayCutoff must be a 24h time "HH:mm"'),
   body('codEnabled').optional({ nullable: true }).isBoolean(),
+  body('onlinePaymentEnabled').optional({ nullable: true }).isBoolean(),
   body('blackoutDates').optional({ nullable: true }).isArray()
     .withMessage('blackoutDates must be an array'),
   body('blackoutDates.*.date').optional().matches(/^\d{4}-\d{2}-\d{2}$/)

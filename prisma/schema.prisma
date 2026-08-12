@@ -60,6 +60,13 @@ model Region {
   // Whether Cash on Delivery is offered in this region. Default true (COD is the only
   // payment method today). Zones may override to disable COD for a specific area.
   codEnabled                     Boolean  @default(true)
+  // Whether online (card / Apple Pay via MyFatoorah) payment is offered in this region.
+  // Opt-in per region (default false): the gateway account is currency-scoped (e.g. an
+  // AED-only Apple Pay certificate), so only regions whose currency the gateway can charge
+  // should be turned on. When false, checkout/buy-now reject MYFATOORAH and the storefront
+  // hides the online option — Cash on Delivery still works. Replaces the old global
+  // "order currency must equal the gateway currency" gate.
+  onlinePaymentEnabled           Boolean  @default(false)
   // ISO 3166-1 alpha-2 code (e.g. "AE", "SA") — renders the region's flag in the
   // storefront's country/region pickers. Null shows a neutral placeholder until
   // an admin sets it (deliberately not required — regions worked without a flag

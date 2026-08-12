@@ -137,7 +137,10 @@ async function createPaymentInvoice(order, customer = {}) {
     CustomerName: customer.name || order.shippingFullName || 'Customer',
     CustomerEmail: customer.email || undefined,
     InvoiceValue: Number(order.totalAmount),
-    DisplayCurrencyIso: CURRENCY,
+    // Charge in the order's own region currency (stamped on Order.currency at checkout),
+    // falling back to the gateway default. Lets each enabled region charge correctly
+    // instead of a single global currency.
+    DisplayCurrencyIso: order.currency || CURRENCY,
     CallBackUrl: CALLBACK_URL,
     ErrorUrl: ERROR_URL || CALLBACK_URL,
     CustomerReference: order.id,
@@ -255,7 +258,7 @@ async function executePayment({ sessionId, order, customer = {} }) {
   const body = {
     SessionId: sessionId,
     InvoiceValue: Number(order.totalAmount),
-    DisplayCurrencyIso: CURRENCY,
+    DisplayCurrencyIso: order.currency || CURRENCY, // order's region currency (see createPaymentInvoice)
     CustomerName: customer.name || order.shippingFullName || 'Customer',
     CustomerReference: order.id, // ties the payment back to our order
     CallBackUrl: CALLBACK_URL,

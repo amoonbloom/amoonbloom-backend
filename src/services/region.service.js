@@ -38,6 +38,7 @@ const REGION_SELECT = {
   sameDayEnabled: true,
   sameDayCutoff: true,
   codEnabled: true,
+  onlinePaymentEnabled: true,
   iso2: true,
   urlSlug: true,
   contactEmail: true,
@@ -95,6 +96,7 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
   set('sameDayEnabled', data.sameDayEnabled != null, parseBool(data.sameDayEnabled, false));
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
   set('codEnabled', data.codEnabled != null, parseBool(data.codEnabled, true));
+  set('onlinePaymentEnabled', data.onlinePaymentEnabled != null, parseBool(data.onlinePaymentEnabled, false));
   return payload;
 }
 
