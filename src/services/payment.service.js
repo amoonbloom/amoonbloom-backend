@@ -247,6 +247,13 @@ function verifyWebhookSignature(rawBody, signature) {
  * Returns { sessionId, countryCode }.
  */
 async function initiateSession() {
+  // Request-time proof of what we actually send (Apple Pay session diagnosis): the exact
+  // URL, the live key's 12-char prefix, and the body. The Apple Pay certificate is bound to
+  // a specific MyFatoorah key/merchant, so a valid-but-wrong SK_ARE_ key still creates an
+  // "ARE" session yet fails merchant validation. keyPrefix must match the Mobile App key.
+  console.log(
+    `[payment] InitiateSession -> ${BASE_URL}/v2/InitiateSession | keyPrefix="${API_KEY.slice(0, 12)}" | body={}`
+  );
   const data = await callMyFatoorah('/v2/InitiateSession', {}, { retries: 1 });
   return {
     sessionId: data.SessionId,
