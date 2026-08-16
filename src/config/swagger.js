@@ -1017,7 +1017,7 @@ const options = {
         Order: {
           type: 'object',
           description:
-            '**PENDING_PAYMENT → PROCESSING** reduces **Product.quantity** per line (**409** if insufficient). **CANCELLED** restores stock whenever **inventoryDeducted** is true. Reverting to **PENDING_PAYMENT** from processing/completed also restores. **ON_HOLD/REFUNDED/FAILED/DRAFT** are pure labels with no stock side effects. **inventoryDeducted** reflects whether deduction is active.',
+            '**Stock is reserved (deducted) at order placement** per line (**409** if insufficient), so a PENDING_PAYMENT order already holds its stock. **CANCELLED** restores stock whenever **inventoryDeducted** is true (incl. the auto-expiry of unpaid online orders). Reverting to **PENDING_PAYMENT** from processing/completed also restores. **ON_HOLD/REFUNDED/FAILED/DRAFT** are pure labels with no stock side effects. **inventoryDeducted** reflects whether deduction is active.',
           properties: {
             id: { type: 'string', format: 'uuid' },
             userId: { type: 'string', format: 'uuid' },

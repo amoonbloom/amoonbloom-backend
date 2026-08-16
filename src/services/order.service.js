@@ -2457,11 +2457,232 @@ async function confirmOrderPayment(key, keyType = 'PaymentId') {
   return { isPaid: true, orderId, status: 'Paid' };
 }
 
+/**
+ * Normalize incoming quote line items into the shape the pricing helpers expect.
+ * Drops anything without a productId or a positive integer quantity.
+ */
+function normalizeQuoteItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((it) => {
+      if (!it || typeof it !== 'object') return null;
+      const productId = it.productId ? String(it.productId).trim() : '';
+      const quantity = Math.max(0, parseInt(it.quantity, 10) || 0);
+      if (!productId || quantity < 1) return null;
+      return {
+        productId,
+        quantity,
+        selectedOptions: it.selectedOptions ?? null,
+        giftCardSelected: !!it.giftCardSelected,
+        customName: it.customName ?? null,
+      };
+    })
+    .filter(Boolean);
+}
+
+/** Load the signed-in user's server cart as quote items (fallback when the caller sends none). */
+async function loadCartItemsForQuote(userId) {
+  const rows = await prisma.cartItem.findMany({
+    where: { cart: { userId } },
+    select: {
+      productId: true,
+      quantity: true,
+      selectedOptions: true,
+      giftCardSelected: true,
+      customName: true,
+    },
+  });
+  return normalizeQuoteItems(rows);
+}
+
+/** Resolve the delivery zone id for a quote from a saved addressId (owned by the user) or an
+ *  inline shippingAddress. Returns null when none is resolvable (→ region-level delivery config). */
+async function resolveQuoteZoneId({ addressId, shippingAddress, userId }) {
+  if (addressId && userId) {
+    const saved = await prisma.address.findFirst({
+      where: { id: addressId, userId },
+      select: { deliveryZoneId: true },
+    });
+    return saved?.deliveryZoneId ?? null;
+  }
+  if (shippingAddress && shippingAddress.deliveryZoneId) {
+    return String(shippingAddress.deliveryZoneId).trim() || null;
+  }
+  return null;
+}
+
+/**
+ * Price an order WITHOUT creating it — returns the exact money breakdown checkout would charge
+ * (item subtotal, promo discount, zone-accurate delivery, VAT), so the app can show the real
+ * total before the customer commits (and for COD, where there is no payment sheet to reveal it).
+ *
+ * Reuses the SAME building blocks as createOrderCore — product pricing
+ * (productService.resolveEffectivePrice/optionExtraCharge), promo
+ * (promoCodeService.validateAndCalculate), VAT (vatService.computeOrderVat), and delivery
+ * (resolveDeliveryConfig) — and the SAME final shipping/VAT/total arithmetic (kept in sync with
+ * the totals block in createOrderCore). Cash arrangement is intentionally excluded: it's a
+ * per-line add-on chosen on the product page, not part of a cart-level quote.
+ *
+ * Never throws for a bad promo — an invalid/expired code in a preview simply yields no discount.
+ *
+ * @param {string|null} userId
+ * @param {object} input { items?, addressId?, shippingAddress?, promoCode? }
+ * @param {object} opts  { regionCode? }  // X-Region
+ * @returns {{ ok:true, quote:object } | { ok:false, error:string, code?:string }}
+ */
+async function quoteOrder(userId, input = {}, opts = {}) {
+  const { addressId, shippingAddress, promoCode } = input;
+
+  // 1) Region: X-Region → user's home region (if active) → default. Same precedence as checkout.
+  let orderRegion = null;
+  if (opts.regionCode) orderRegion = await regionService.resolveRegion(opts.regionCode);
+  if (!orderRegion && userId) {
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { regionId: true } });
+    if (u?.regionId) {
+      const r = await regionService.getRegionById(u.regionId);
+      if (r?.isActive) orderRegion = r;
+    }
+  }
+  if (!orderRegion) orderRegion = await regionService.getDefaultRegion();
+  const orderRegionId = orderRegion?.id ?? null;
+  const currency = orderRegion?.currency || 'AED';
+
+  // 2) Items: explicit, else the signed-in user's server cart.
+  let items = normalizeQuoteItems(input.items);
+  if (!items.length && userId) items = await loadCartItemsForQuote(userId);
+  if (!items.length) return { ok: false, error: 'No items to quote.', code: 'QUOTE_NO_ITEMS' };
+
+  // 3) Delivery zone (from addressId/inline) → effective delivery config (zone → region → default).
+  let orderZone = null;
+  const zoneId = await resolveQuoteZoneId({ addressId, shippingAddress, userId });
+  if (zoneId && orderRegionId) {
+    try {
+      orderZone = await deliveryZoneService.assertValidZone(zoneId, orderRegionId);
+    } catch (err) {
+      // A stale/foreign zone id in a QUOTE degrades to region-level pricing (never blocks a preview).
+      if (!['ZONE_NOT_FOUND', 'ZONE_INACTIVE', 'ZONE_WRONG_REGION'].includes(err.code)) throw err;
+    }
+  }
+  const deliveryConfig = resolveDeliveryConfig(orderRegion, orderZone, { subtotal: null, now: new Date() });
+
+  // 4) Load products (region-aware) and price each line exactly like checkout.
+  const productIds = [...new Set(items.map((i) => i.productId))];
+  const productRows = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: {
+      id: true,
+      categoryId: true,
+      price: true,
+      discountedPrice: true,
+      regions: { where: { regionId: orderRegionId }, select: { price: true, discountedPrice: true } },
+      giftCardEnabled: true,
+      giftCardExtraPrice: true,
+      customNameEnabled: true,
+      customNamePrice: true,
+      productOptions: { orderBy: { sortOrder: 'asc' } },
+      variants: { orderBy: { sortOrder: 'asc' } },
+    },
+  });
+  const productById = new Map(productRows.map((p) => [p.id, p]));
+  const missing = items.find((i) => !productById.has(i.productId));
+  if (missing) return { ok: false, error: `Product not found: ${missing.productId}`, code: 'QUOTE_PRODUCT_NOT_FOUND' };
+
+  const pricedLines = items.map((it) => {
+    const p = productById.get(it.productId);
+    const base = productService.resolveEffectivePrice(p, it.selectedOptions);
+    const extra = productService.optionExtraCharge(p, {
+      giftCardSelected: it.giftCardSelected,
+      customName: it.customName,
+    });
+    return { productId: it.productId, categoryId: p.categoryId, quantity: it.quantity, unitPrice: round2(base + extra) };
+  });
+
+  // 5) Promo discount — validated + computed against the same live prices. In a preview an
+  //    invalid/expired/ineligible code just means no discount (never an error).
+  let discount = 0;
+  let appliedPromoCode = null;
+  if (promoCode && String(promoCode).trim()) {
+    try {
+      const promoItems = pricedLines.map((l) => ({
+        productId: l.productId,
+        quantity: l.quantity,
+        price: l.unitPrice,
+        categoryId: l.categoryId,
+      }));
+      const res = await promoCodeService.validateAndCalculate(String(promoCode).trim(), userId, promoItems, orderRegionId);
+      if (res) {
+        discount = round2(Number(res.discountAmount) || 0);
+        appliedPromoCode = res.promoCode?.code ?? null;
+      }
+    } catch (_) {
+      /* invalid promo in a quote → ignore, discount stays 0 */
+    }
+  }
+
+  // 6) VAT on the net (post-discount) taxable lines — the exact helper checkout uses. It also
+  //    clamps the discount to the subtotal, so read it back.
+  const vatConfig = await vatService.resolveConfigForOrder(orderRegionId);
+  const vatLines = pricedLines.map((l) => ({
+    productId: l.productId,
+    categoryId: l.categoryId,
+    quantity: l.quantity,
+    unitPrice: l.unitPrice,
+  }));
+  const vat = vatService.computeOrderVat(vatLines, discount, vatConfig);
+  discount = vat.discountAmount;
+
+  // 7) Shipping + shipping VAT + total — MUST stay in sync with the totals block in
+  //    createOrderCore (order.service.js). Cash arrangement excluded (see fn doc).
+  const netForDelivery = round2(Math.max(0, Number(vat.subtotal) - Number(discount)));
+  const freeDeliveryApplies =
+    deliveryConfig.freeDeliveryThreshold != null && netForDelivery >= deliveryConfig.freeDeliveryThreshold;
+  const shippingAmount = freeDeliveryApplies ? 0 : round2(Number(deliveryConfig.deliveryFee ?? 0));
+
+  const vatRate = vatConfig && vatConfig.enabled ? Number(vatConfig.ratePercent) || 0 : 0;
+  const vatIsInclusive = Boolean(vatConfig && vatConfig.inclusive);
+  let shippingVatAmount = 0;
+  let shippingVatAdds = false;
+  if (vatRate > 0 && shippingAmount > 0) {
+    if (vatIsInclusive) {
+      shippingVatAmount = round2(shippingAmount - shippingAmount / (1 + vatRate / 100));
+    } else {
+      shippingVatAmount = round2(shippingAmount * (vatRate / 100));
+      shippingVatAdds = true;
+    }
+  }
+
+  const taxAmount = round2(vat.vatAmount + shippingVatAmount);
+  const totalAmount = round2(vat.total + shippingAmount + (shippingVatAdds ? shippingVatAmount : 0));
+
+  return {
+    ok: true,
+    quote: {
+      subtotalAmount: vat.subtotal,
+      discountAmount: discount,
+      shippingAmount,
+      taxAmount,
+      // Rate/inclusive reported whenever VAT is configured for the region (even inclusive, where
+      // it isn't added on top) so the app can label the VAT line correctly.
+      vatRatePercent: vatRate > 0 ? vatRate : null,
+      vatInclusive: vatRate > 0 ? vatIsInclusive : false,
+      totalAmount,
+      currency,
+      appliedPromoCode,
+      // Context the app can surface without a second call.
+      freeDeliveryThreshold: deliveryConfig.freeDeliveryThreshold ?? null,
+      minOrderAmount: deliveryConfig.minOrderAmount ?? null,
+      maxOrderAmount: deliveryConfig.maxOrderAmount ?? null,
+      deliveryZoneName: orderZone?.name ?? null,
+    },
+  };
+}
+
 module.exports = {
   createOrder,
   createGuestOrder,
   linkGuestOrdersToUser,
   buyNow,
+  quoteOrder,
   getOrderById,
   getAllOrdersAdmin,
   getMyOrderHistory,

@@ -176,6 +176,54 @@ router.post(
 
 /**
  * @swagger
+ * /orders/quote:
+ *   post:
+ *     summary: Price a cart WITHOUT creating an order (totals preview)
+ *     description: >
+ *       Returns the exact money breakdown checkout would charge — item subtotal, promo discount,
+ *       zone-accurate delivery fee, and VAT — computed with the SAME helpers as checkout, WITHOUT
+ *       creating an order. Works for signed-in users (falls back to their server cart when `items`
+ *       is omitted) and guests. Pass `addressId` (or `shippingAddress.deliveryZoneId`) so the
+ *       delivery zone resolves the correct fee; an invalid/expired `promoCode` is ignored (no
+ *       discount) rather than erroring. Cash arrangement is excluded (it's a per-line add-on).
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     productId: { type: string, format: uuid }
+ *                     quantity: { type: integer, minimum: 1 }
+ *                     selectedOptions: { type: object, nullable: true }
+ *                     giftCardSelected: { type: boolean }
+ *                     customName: { type: string, nullable: true }
+ *               addressId: { type: string, format: uuid, nullable: true }
+ *               promoCode: { type: string, nullable: true }
+ *     responses:
+ *       200:
+ *         description: "{ subtotalAmount, discountAmount, shippingAmount, taxAmount, vatRatePercent, vatInclusive, totalAmount, currency, appliedPromoCode, freeDeliveryThreshold, minOrderAmount, maxOrderAmount, deliveryZoneName }"
+ */
+router.post(
+  '/quote',
+  optionalAuth,
+  [
+    body('items').optional().isArray().withMessage('items must be an array'),
+    body('addressId').optional({ checkFalsy: true }).isUUID().withMessage('addressId must be a valid id'),
+    body('promoCode').optional({ nullable: true }).isString().trim(),
+  ],
+  handleValidationErrors,
+  orderController.quote
+);
+
+/**
+ * @swagger
  * /orders/guest-checkout:
  *   post:
  *     summary: Place order as a guest (no authentication)
