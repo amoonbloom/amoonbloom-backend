@@ -95,6 +95,18 @@ model Region {
   address_ar                     String?
   hours                          String?
   hours_ar                       String?
+  // Per-region social media links shown in the storefront footer + Instagram
+  // strip. Each null = that icon isn't rendered for the region (the storefront
+  // only shows an icon when its URL is set), with an ultimate fallback to the
+  // frontend's siteConfig.links.* so existing regions keep the current icons
+  // until an admin sets region-specific ones. Full absolute URLs.
+  instagramUrl                   String?
+  facebookUrl                    String?
+  tiktokUrl                      String?
+  threadsUrl                     String?
+  snapchatUrl                    String?
+  xUrl                           String?
+  youtubeUrl                     String?
   // Legal citations shown across the 5 storefront legal pages (Privacy, Terms,
   // Refund Policy, Shipping Policy, Product Disclaimer) — e.g. the IP law
   // citation, the consumer-protection regulator name. Required at creation
@@ -129,22 +141,89 @@ model Region {
   createdAt                      DateTime @default(now())
   updatedAt                      DateTime @updatedAt
 
-  products      ProductRegion[]
-  categories    CategoryRegion[]
-  banners       BannerRegion[]
-  sections      SectionRegion[]
-  promoCodes    PromoCodeRegion[]
-  users         User[]
-  managerScopes ManagerRegion[]
-  orders        Order[]
+  products              ProductRegion[]
+  categories            CategoryRegion[]
+  banners               BannerRegion[]
+  sections              SectionRegion[]
+  promoCodes            PromoCodeRegion[]
+  users                 User[]
+  managerScopes         ManagerRegion[]
+  orders                Order[]
   vatConfig             VatConfig?
   cashArrangementConfig CashArrangementConfig?
-  deliveryZones DeliveryZone[]
-  addresses     Address[]
-  blackoutDates DeliveryBlackoutDate[]
+  deliveryZones         DeliveryZone[]
+  addresses             Address[]
+  blackoutDates         DeliveryBlackoutDate[]
+  legalPages            RegionLegalPage[]
+  branches              RegionBranch[]
 
   @@index([isActive])
   @@index([sortOrder])
+}
+
+/// The 5 footer legal pages the admin can author per region. A fixed set (not a
+/// free-form CMS) — each maps to a storefront route (terms, privacy, ...).
+enum LegalPageSlug {
+  TERMS
+  PRIVACY
+  REFUND_POLICY
+  SHIPPING_POLICY
+  PRODUCT_DISCLAIMER
+}
+
+/// Admin-authored rich-text legal page for one region + one slug (EN + AR).
+/// Replaces the previously-hardcoded storefront templates: a page is rendered
+/// ONLY when a published RegionLegalPage exists with content for the requested
+/// locale — otherwise the storefront 404s and the footer omits the link
+/// ("hidden until set"). `content`/`content_ar` are SANITIZED HTML produced by
+/// the admin rich-text editor (bold, highlight, headings, lists, links) and
+/// sanitized again on render (rendered via dangerouslySetInnerHTML). Existing
+/// regions are backfilled from the old templates at deploy time so live pages
+/// don't disappear. One row per (region, slug).
+model RegionLegalPage {
+  id          String        @id @default(uuid())
+  regionId    String
+  slug        LegalPageSlug
+  title       String?
+  title_ar    String?
+  content     String?       @db.Text
+  content_ar  String?       @db.Text
+  isPublished Boolean       @default(true)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  region Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@unique([regionId, slug])
+  @@index([regionId])
+}
+
+/// Admin-managed physical store/branch for a region (EN + AR), shown on the
+/// storefront Branches page. A region with no active branches renders the
+/// delivery-only card instead (replaces the old hardcoded UAE-only branch
+/// list). `hours` is the free-text opening/closing hours line.
+model RegionBranch {
+  id         String   @id @default(uuid())
+  regionId   String
+  name       String
+  name_ar    String?
+  address    String?
+  address_ar String?
+  phone      String?
+  hours      String?
+  hours_ar   String?
+  note       String?
+  note_ar    String?
+  mapUrl     String?
+  isActive   Boolean  @default(true)
+  sortOrder  Int      @default(0)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  region Region @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@index([regionId])
+  @@index([isActive])
 }
 
 /// Admin-managed delivery sub-areas within a region (e.g. UAE's emirates:
@@ -152,38 +231,38 @@ model Region {
 /// different region can have its own list later with no schema change —
 /// mirrors the Region -> VatConfig relationship.
 model DeliveryZone {
-  id        String   @id @default(uuid())
-  regionId  String
-  name      String
-  name_ar   String?
-  isActive  Boolean  @default(true)
-  sortOrder Int      @default(0)
+  id                              String   @id @default(uuid())
+  regionId                        String
+  name                            String
+  name_ar                         String?
+  isActive                        Boolean  @default(true)
+  sortOrder                       Int      @default(0)
   // ---- Per-zone delivery config OVERRIDES ----
   // Every override below is nullable / empty-by-default. null (or [] for arrays) means
   // "inherit the parent Region's value" — so an untouched zone behaves exactly as it did
   // before these columns existed. See deliveryConfig.service.js for the resolution chain.
   // Flat shipping fee for this zone. null = inherit Region.shippingFlatRate.
-  shippingFlatRate      Decimal? @db.Decimal(10, 2)
+  shippingFlatRate                Decimal? @db.Decimal(10, 2)
   // Free-delivery threshold for this zone. null = inherit Region.freeDeliveryThreshold.
-  freeDeliveryThreshold Decimal? @db.Decimal(10, 2)
+  freeDeliveryThreshold           Decimal? @db.Decimal(10, 2)
   // Same-day offered in this zone? null = inherit Region.sameDayEnabled.
-  sameDayEnabled        Boolean?
+  sameDayEnabled                  Boolean?
   // Same-day cutoff "HH:mm" (region timezone). null = inherit Region.sameDayCutoff.
-  sameDayCutoff         String?
+  sameDayCutoff                   String?
   // Standard courier lead time (whole days) for this zone. null = inherit
   // Region.standardDeliveryDays. Distinct from product/category PREP lead days.
-  standardLeadDays      Int?
+  standardLeadDays                Int?
   // Allowed delivery weekdays (0=Sun..6=Sat). [] = inherit the region's deliveryDays.
-  deliveryDays          Int[]    @default([])
+  deliveryDays                    Int[]    @default([])
   // COD offered in this zone? null = inherit Region.codEnabled (effective default yes).
-  codEnabled            Boolean?
+  codEnabled                      Boolean?
   // Order (net) minimum/maximum to deliver to this zone. null = no bound.
-  minOrderAmount        Decimal? @db.Decimal(10, 2)
-  maxOrderAmount        Decimal? @db.Decimal(10, 2)
+  minOrderAmount                  Decimal? @db.Decimal(10, 2)
+  maxOrderAmount                  Decimal? @db.Decimal(10, 2)
   // Cash-arrangement quick-pick amounts / banknote denominations for this zone. []
   // (default) = inherit the region's CashArrangementConfig lists. See cashArrangement.service.js.
-  cashArrangementQuickPickAmounts Int[] @default([])
-  cashArrangementDenominations    Int[] @default([])
+  cashArrangementQuickPickAmounts Int[]    @default([])
+  cashArrangementDenominations    Int[]    @default([])
   // Zone-wide cash-arrangement service-fee schedule (both-or-neither). This is the FLAT
   // per-zone fee — the base fallback for any in-scope cart line with no more-specific
   // product/category override. Precedence (see cashArrangementMath.js): productZone >
@@ -191,8 +270,8 @@ model DeliveryZone {
   // regionFlat (CashArrangementConfig). null = inherit the region's flat fee.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt                       DateTime @default(now())
+  updatedAt                       DateTime @updatedAt
 
   region        Region         @relation(fields: [regionId], references: [id], onDelete: Cascade)
   addresses     Address[]
@@ -210,7 +289,7 @@ model DeliveryZone {
 model DeliveryBlackoutDate {
   id        String   @id @default(uuid())
   regionId  String
-  date      String   // "YYYY-MM-DD"
+  date      String // "YYYY-MM-DD"
   label     String?
   label_ar  String?
   createdAt DateTime @default(now())
@@ -227,22 +306,22 @@ model DeliveryBlackoutDate {
 /// conversion) — null means "no override set", storefront/order pricing falls
 /// back to Product.price/discountedPrice (the base AED price) for that region.
 model ProductRegion {
-  productId       String
-  regionId        String
-  price           Decimal? @db.Decimal(10, 2)
-  discountedPrice Decimal? @db.Decimal(10, 2)
+  productId                       String
+  regionId                        String
+  price                           Decimal? @db.Decimal(10, 2)
+  discountedPrice                 Decimal? @db.Decimal(10, 2)
   // Per-region "ships within N days" PREP lead time for this product. Overrides
   // the product's global Product.deliveryLeadDays in this region only. Null = no
   // per-region override (falls through the chain). Distinct from
   // Region.standardDeliveryDays (region-wide courier transit).
-  deliveryLeadDays Int?
+  deliveryLeadDays                Int?
   // Per-region override of this product's cash-arrangement fee schedule. Both
   // fields must be set together or neither (a lone step or margin is invalid) —
   // see Product.cashArrangementFeeStepAmount for the default tier and
   // utils/cashArrangementMath.js for the full precedence chain.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt       DateTime @default(now())
+  createdAt                       DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   region  Region  @relation(fields: [regionId], references: [id], onDelete: Cascade)
@@ -252,18 +331,18 @@ model ProductRegion {
 }
 
 model CategoryRegion {
-  categoryId String
-  regionId   String
+  categoryId                      String
+  regionId                        String
   // Per-region "ships within N days" PREP lead time for this category. Overrides
   // the category's global Category.deliveryLeadDays in this region, for products
   // that don't set their own. Null = no per-region override.
-  deliveryLeadDays Int?
+  deliveryLeadDays                Int?
   // Per-region override of this category's cash-arrangement fee schedule (for
   // products that don't set their own product-level/product-region override).
   // Both fields must be set together or neither.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt  DateTime @default(now())
+  createdAt                       DateTime @default(now())
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   region   Region   @relation(fields: [regionId], references: [id], onDelete: Cascade)
@@ -277,15 +356,15 @@ model CategoryRegion {
 /// values (see utils/deliveryLeadDays.js). Only consulted at checkout/order time, where a
 /// concrete zone is known (the storefront browse has no committed zone). Null = no override.
 model ProductZone {
-  productId        String
-  zoneId           String
-  deliveryLeadDays Int?
+  productId                       String
+  zoneId                          String
+  deliveryLeadDays                Int?
   // Per-zone override of this product's cash-arrangement fee schedule — highest
   // precedence tier in the chain (see utils/cashArrangementMath.js). Both fields
   // must be set together or neither.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt        DateTime @default(now())
+  createdAt                       DateTime @default(now())
 
   product Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
   zone    DeliveryZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
@@ -297,14 +376,14 @@ model ProductZone {
 /// Join: per-DELIVERY-ZONE prep lead override for a category (applies to its products that
 /// don't set their own product-zone override). Same precedence rules as ProductZone.
 model CategoryZone {
-  categoryId       String
-  zoneId           String
-  deliveryLeadDays Int?
+  categoryId                      String
+  zoneId                          String
+  deliveryLeadDays                Int?
   // Per-zone override of this category's cash-arrangement fee schedule. Both
   // fields must be set together or neither.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt        DateTime @default(now())
+  createdAt                       DateTime @default(now())
 
   category Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
   zone     DeliveryZone @relation(fields: [zoneId], references: [id], onDelete: Cascade)
@@ -391,7 +470,7 @@ model User {
   /// accounts ignore this entirely — they are always all-region. Distinct from the
   /// `regionId` above, which is the region the account itself *belongs to* (a
   /// customer's browsing default). See src/utils/regionScope.js.
-  managedRegions  ManagerRegion[]
+  managedRegions ManagerRegion[]
 
   @@index([regionId])
 }
@@ -464,8 +543,8 @@ model Section {
   mobileColumns  Int           @default(2)
   mobileLimit    Int           @default(12)
 
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   products   SectionProduct[]
   categories SectionCategory[]
@@ -538,25 +617,25 @@ model BannerImage {
 // ============================================
 
 model Settings {
-  id                String   @id @default("default")
-  siteName          String   @default("Amoon Bloom")
-  logo              String?
-  contactEmail      String   @default("contact@example.com")
-  supportEmail      String   @default("support@example.com")
-  currency          String   @default("AED")
-  maintenanceMode   Boolean  @default(false)
-  hiddenPages       String[] @default([])
+  id                      String   @id @default("default")
+  siteName                String   @default("Amoon Bloom")
+  logo                    String?
+  contactEmail            String   @default("contact@example.com")
+  supportEmail            String   @default("support@example.com")
+  currency                String   @default("AED")
+  maintenanceMode         Boolean  @default(false)
+  hiddenPages             String[] @default([])
   /// Master switch for the product-reviews feature. When true (default), anyone —
   /// signed in or not — can submit a review (guests provide name + email). When
   /// false, only signed-in customers can submit; guest submissions are rejected.
-  allowGuestReviews Boolean  @default(true)
+  allowGuestReviews       Boolean  @default(true)
   /// Fallback "ships within N day(s)" prep/booking lead time (whole days) used when
   /// neither the product nor its category overrides it. Distinct from
   /// Region.standardDeliveryDays (courier/regional transit time, not prep time) —
   /// the storefront's estimated delivery date is computed from both. See
   /// Category.deliveryLeadDays / Product.deliveryLeadDays for the override chain.
   defaultDeliveryLeadDays Int      @default(1)
-  updatedAt         DateTime @updatedAt
+  updatedAt               DateTime @updatedAt
 }
 
 // ============================================
@@ -710,102 +789,102 @@ model UserContact {
 // ============================================
 
 model Category {
-  id             String        @id @default(uuid())
-  title          String
-  title_ar       String?
-  description    String?       @db.Text
-  description_ar String?       @db.Text
-  image          String?
-  totalProducts  Int           @default(0)
-  status         PublishStatus @default(DRAFT)
+  id                              String                  @id @default(uuid())
+  title                           String
+  title_ar                        String?
+  description                     String?                 @db.Text
+  description_ar                  String?                 @db.Text
+  image                           String?
+  totalProducts                   Int                     @default(0)
+  status                          PublishStatus           @default(DRAFT)
   /// "Coming soon" teaser state, orthogonal to status. A PUBLISHED + comingSoon
   /// category stays fully visible on the storefront but cannot be ordered, and the
   /// flag cascades to every product inside it (a product is effectively coming-soon
   /// if its own comingSoon OR its category's is set). Not a PublishStatus value on
   /// purpose: keeps visibility queries unchanged and can't break strict-enum clients.
-  comingSoon     Boolean       @default(false)
+  comingSoon                      Boolean                 @default(false)
   /// Default gift-card input mode for every product in this category that doesn't set
   /// its own Product.giftCardMode. MESSAGE (personalized note) or NAME (a "gift name").
   /// Null = no category default (products fall through to the MESSAGE default).
-  giftCardMode   GiftCardMode?
+  giftCardMode                    GiftCardMode?
   /// How far a DRAFT status reaches (ignored while PUBLISHED).
   /// HOME_ONLY: the category is hidden from the home page/category grid, but its
   /// products still appear on the Shop/all-products listing (legacy behavior, so
   /// existing draft categories are unaffected).
   /// ENTIRE_STORE: additionally removes the category's products from the storefront
   /// entirely — Shop listing, search, best-sellers, and direct product pages.
-  draftScope     CategoryVisibilityScope @default(HOME_ONLY)
+  draftScope                      CategoryVisibilityScope @default(HOME_ONLY)
   /// Overrides Settings.defaultDeliveryLeadDays for every product in this category
   /// that doesn't set its own Product.deliveryLeadDays. Null = no override (falls
   /// through to the global default).
-  deliveryLeadDays Int?
+  deliveryLeadDays                Int?
   /// Default cash-arrangement fee schedule for every product in this category that
   /// doesn't set its own Product.cashArrangementFeeStepAmount. Overridden per-region
   /// by CategoryRegion.cashArrangementFee*, and per-zone by CategoryZone.cashArrangementFee*.
   /// Both fields must be set together or neither. Null = no fee schedule at this tier.
-  cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
-  cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  createdAt      DateTime      @default(now())
-  updatedAt      DateTime      @updatedAt
+  cashArrangementFeeStepAmount    Decimal?                @db.Decimal(10, 2)
+  cashArrangementFeeMarginPercent Decimal?                @db.Decimal(5, 2)
+  createdAt                       DateTime                @default(now())
+  updatedAt                       DateTime                @updatedAt
 
-  products                Product[]
-  sectionCategories       SectionCategory[]
-  promoCodeCategories     PromoCodeCategory[]
-  vatConfigCategories     VatConfigCategory[]
-  cashArrangementConfigs  CashArrangementConfigCategory[]
-  regions                 CategoryRegion[]
-  zoneLeadDays            CategoryZone[]
+  products               Product[]
+  sectionCategories      SectionCategory[]
+  promoCodeCategories    PromoCodeCategory[]
+  vatConfigCategories    VatConfigCategory[]
+  cashArrangementConfigs CashArrangementConfigCategory[]
+  regions                CategoryRegion[]
+  zoneLeadDays           CategoryZone[]
 
   @@index([title])
   @@index([status])
 }
 
 model Product {
-  id                 String        @id @default(uuid())
-  title              String
-  title_ar           String?
-  subtitle           String?
-  subtitle_ar        String?
-  price              Decimal       @db.Decimal(10, 2)
-  discountedPrice    Decimal?      @db.Decimal(10, 2)
+  id                              String        @id @default(uuid())
+  title                           String
+  title_ar                        String?
+  subtitle                        String?
+  subtitle_ar                     String?
+  price                           Decimal       @db.Decimal(10, 2)
+  discountedPrice                 Decimal?      @db.Decimal(10, 2)
   // Gift card add-on: free personalized message at add-to-cart time. Enabled per
   // product to mirror the client site, where most (but not all) products offer it.
-  giftCardEnabled    Boolean       @default(false)
-  giftCardExtraPrice Decimal?      @db.Decimal(10, 2)
+  giftCardEnabled                 Boolean       @default(false)
+  giftCardExtraPrice              Decimal?      @db.Decimal(10, 2)
   // Which input the gift card collects: MESSAGE (a personalized note, the default) or
   // NAME (a single "gift name"). Null = inherit the category's giftCardMode, then the
   // MESSAGE default. Resolved product ?? category ?? MESSAGE (see giftCardMode.js).
-  giftCardMode       GiftCardMode?
+  giftCardMode                    GiftCardMode?
   // Custom name add-on: customer types a name at add-to-cart time for an extra
   // fee. Only enabled on select products (mugs/cups/boxes), never bouquets.
-  customNameEnabled  Boolean       @default(false)
-  customNamePrice    Decimal?      @db.Decimal(10, 2)
+  customNameEnabled               Boolean       @default(false)
+  customNamePrice                 Decimal?      @db.Decimal(10, 2)
   // Overrides both Category.deliveryLeadDays and Settings.defaultDeliveryLeadDays
   // for this product specifically. Null = no override (falls through the chain:
   // product -> category -> global default).
-  deliveryLeadDays   Int?
+  deliveryLeadDays                Int?
   // Default cash-arrangement fee schedule for this product specifically. Overridden
   // per-region by ProductRegion.cashArrangementFee*, and per-zone by
   // ProductZone.cashArrangementFee* (see utils/cashArrangementMath.js for the full
   // precedence chain: productZone ?? productRegion ?? product ?? categoryZone ??
   // categoryRegion ?? category). Both fields must be set together or neither.
-  cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
-  cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
-  quantity           Int           @default(0)
-  categoryId         String?
-  status             PublishStatus @default(DRAFT)
+  cashArrangementFeeStepAmount    Decimal?      @db.Decimal(10, 2)
+  cashArrangementFeeMarginPercent Decimal?      @db.Decimal(5, 2)
+  quantity                        Int           @default(0)
+  categoryId                      String?
+  status                          PublishStatus @default(DRAFT)
   // "Coming soon" teaser state, orthogonal to status: a PUBLISHED + comingSoon
   // product stays visible (its detail page is viewable) but cannot be added to cart
   // or ordered — enforced server-side in cart/order services so every client (web +
   // mobile) is blocked. Also inherited when the product's category is comingSoon.
-  comingSoon         Boolean       @default(false)
+  comingSoon                      Boolean       @default(false)
   // Admin-controlled display order (drag-and-drop). Defaults to 0 so existing
   // products keep their createdAt-desc order until an admin reorders them.
-  sortOrder          Int           @default(0)
-  createdAt          DateTime      @default(now())
-  updatedAt          DateTime      @updatedAt
+  sortOrder                       Int           @default(0)
+  createdAt                       DateTime      @default(now())
+  updatedAt                       DateTime      @updatedAt
 
-  category               Category?                       @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  category               Category?                      @relation(fields: [categoryId], references: [id], onDelete: Restrict)
   images                 ProductImage[]
   descriptions           ProductDescription[]
   productOptions         ProductOption[]
@@ -922,14 +1001,14 @@ model ProductVariant {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product      Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
   // This variant's OWN description blocks (Description tab), when it overrides the
   // shared ones instead of inheriting them — see ProductDescription.variantId.
   descriptions ProductDescription[]
   // This variant's OWN colour choices — e.g. Large might offer Pink/Blue/Red while
   // Medium only offers Blue/Black. Purely cosmetic (never affects price/stock); see
   // ProductVariantColor for the photo-swap contract.
-  colors ProductVariantColor[]
+  colors       ProductVariantColor[]
 
   @@unique([productId, optionValue])
   @@index([productId])
@@ -1055,35 +1134,35 @@ model Cart {
 }
 
 model CartItem {
-  id               String   @id @default(uuid())
-  cartId           String
-  productId        String
-  quantity         Int      @default(1)
-  message          String?  @db.Text
+  id                          String        @id @default(uuid())
+  cartId                      String
+  productId                   String
+  quantity                    Int           @default(1)
+  message                     String?       @db.Text
   /// Chosen variant, e.g. {"Colour":"Pink","Size":"M"} — keyed by the product's
   /// ProductOption.title. Carried through to OrderItem.selectedOptions at checkout.
-  selectedOptions  Json?
+  selectedOptions             Json?
   /// Stable, normalized serialization of `selectedOptions` (sorted "title=value|…",
   /// "" when no variant). Makes the cart VARIANT-AWARE: the same product in two
   /// different colours is two distinct lines (Amazon/Shopify-style) instead of one
   /// line whose selection is overwritten. Part of the uniqueness key below.
-  variantKey       String   @default("")
+  variantKey                  String        @default("")
   // Gift card / custom name add-on selections. `message` above doubles as the
   // gift card's personalized note when giftCardSelected is true.
-  giftCardSelected Boolean  @default(false)
+  giftCardSelected            Boolean       @default(false)
   // Resolved gift-card input mode at add-time (product ?? category ?? MESSAGE), so the
   // cart/order can label the value correctly ("Gift name" vs "Gift message"). Null =
   // no gift card on this line (or a legacy line predating the feature → treat as MESSAGE).
-  giftCardMode     GiftCardMode?
-  customName       String?
+  giftCardMode                GiftCardMode?
+  customName                  String?
   // Per-UNIT cash arrangement for this line (the fee itself is resolved at checkout, never
   // stored here). null amount = no cash for this line. Folded into variantKey below (like
   // the gift card message) so units with different cash configs stay separate lines.
-  cashArrangementAmount       Decimal? @db.Decimal(10, 2)
+  cashArrangementAmount       Decimal?      @db.Decimal(10, 2)
   cashArrangementDenomination Int?
-  cashArrangementNote         String?  @db.Text
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  cashArrangementNote         String?       @db.Text
+  createdAt                   DateTime      @default(now())
+  updatedAt                   DateTime      @updatedAt
 
   cart    Cart    @relation(fields: [cartId], references: [id], onDelete: Cascade)
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -1101,118 +1180,118 @@ model CartItem {
 // ============================================
 
 model Order {
-  id                    String        @id @default(uuid())
+  id                          String        @id @default(uuid())
   /// Human-friendly sequential order number (Shopify-style, starts at 1001). Backed by a
   /// Postgres sequence; assigned by the DB on insert. Unique and shown to customers/staff
   /// instead of the raw UUID.
-  orderNumber           Int           @unique @default(dbgenerated("nextval('order_number_seq'::regclass)"))
+  orderNumber                 Int           @unique @default(dbgenerated("nextval('order_number_seq'::regclass)"))
   /// Owning customer. NULL for guest (unauthenticated) checkout — such orders carry
   /// the contact snapshot in guestName/guestPhone/guestEmail and are back-linked to a
   /// user account later when someone signs up/in with the same email (see
   /// order.service.linkGuestOrdersToUser).
-  userId                String?
+  userId                      String?
   /// Guest checkout contact snapshot (only set when userId is NULL). guestEmail is the
   /// account-linking key and is stored trimmed + lowercased to match auth's normalization.
-  guestName             String?
-  guestPhone            String?
-  guestEmail            String?
-  orderMessage          String?       @db.Text
-  totalAmount           Decimal       @db.Decimal(10, 2)
-  discountAmount        Decimal?      @db.Decimal(10, 2)
+  guestName                   String?
+  guestPhone                  String?
+  guestEmail                  String?
+  orderMessage                String?       @db.Text
+  totalAmount                 Decimal       @db.Decimal(10, 2)
+  discountAmount              Decimal?      @db.Decimal(10, 2)
   /// Total VAT for this order (order currency). For EXCLUSIVE VAT this is added on top of the
   /// net (discounted) amount and is part of totalAmount; for INCLUSIVE VAT it is the tax
   /// portion already inside the line prices and is NOT added to totalAmount. 0 when no VAT.
-  taxAmount             Decimal       @default(0) @db.Decimal(10, 2)
+  taxAmount                   Decimal       @default(0) @db.Decimal(10, 2)
   /// Pre-VAT, pre-discount sum of live line prices (order currency). Null for legacy orders.
-  subtotalAmount        Decimal?      @db.Decimal(10, 2)
+  subtotalAmount              Decimal?      @db.Decimal(10, 2)
   /// VAT rate snapshot (percent) applied at checkout. Null when no VAT applied.
-  vatRatePercent        Decimal?      @db.Decimal(5, 2)
+  vatRatePercent              Decimal?      @db.Decimal(5, 2)
   /// Whether prices were VAT-inclusive at checkout (tax already inside the price). When true,
   /// taxAmount is the portion inside totalAmount; when false it was added on top of the net.
-  vatInclusive          Boolean       @default(false)
-  appliedPromoCode      String?
-  appliedPromoCodeId    String?
-  paymentMethod         PaymentMethod @default(COD)
-  status                OrderStatus   @default(PENDING_PAYMENT)
+  vatInclusive                Boolean       @default(false)
+  appliedPromoCode            String?
+  appliedPromoCodeId          String?
+  paymentMethod               PaymentMethod @default(COD)
+  status                      OrderStatus   @default(PENDING_PAYMENT)
   /// Online-payment state. COD orders stay UNPAID until delivered/collected; MyFatoorah orders flip to PAID once GetPaymentStatus confirms it.
-  paymentStatus         PaymentStatus @default(UNPAID)
+  paymentStatus               PaymentStatus @default(UNPAID)
   /// MyFatoorah InvoiceId returned by SendPayment (the payment we created for this order). Null for COD.
-  paymentInvoiceId      String?
+  paymentInvoiceId            String?
   /// MyFatoorah transaction/payment id captured at confirmation (from GetPaymentStatus). Null for COD.
-  paymentTransactionId  String?
+  paymentTransactionId        String?
   /// Soft ref to the saved Address used at checkout (may be null for legacy orders or if address was deleted).
-  addressId             String?
+  addressId                   String?
   /// Address snapshot — copied from the saved or inline address at checkout time so order history stays accurate.
-  shippingFullName      String?
-  shippingPhone         String?
-  shippingStreetAddress String?
-  shippingApartment     String?
-  shippingCity          String?
-  shippingState         String?
-  shippingPostalCode    String?
-  shippingCountry       String?
+  shippingFullName            String?
+  shippingPhone               String?
+  shippingStreetAddress       String?
+  shippingApartment           String?
+  shippingCity                String?
+  shippingState               String?
+  shippingPostalCode          String?
+  shippingCountry             String?
   /// Area/neighborhood free text, snapshot from the address used at checkout.
-  shippingArea          String?
+  shippingArea                String?
   /// Delivery zone (e.g. emirate) NAME snapshot — not an FK, so renaming/deleting
   /// the zone later never alters historical orders (same reasoning as vatRatePercent).
-  shippingZoneName      String?
+  shippingZoneName            String?
   /// Flat shipping fee charged on this order, snapshot from Region.shippingFlatRate
   /// at checkout time. Null/0 = free (no rate configured for the region at the time).
-  shippingAmount        Decimal?      @db.Decimal(10, 2)
+  shippingAmount              Decimal?      @db.Decimal(10, 2)
   /// ORDER-LEVEL ROLL-UP of the per-line cash arrangements (cash arrangement is now PER
   /// ITEM — see OrderItem.cashArrangement*). These are the aggregate across all lines,
   /// kept so older consumers (mobile app, exports) still see one total per order.
   /// Snapshotted at order-creation time and NEVER re-derived later.
   /// requested = any line requested cash.
-  cashArrangementRequested    Boolean  @default(false)
+  cashArrangementRequested    Boolean       @default(false)
   /// SUM of every line's (per-unit cash × quantity). Never passed through VAT — added to
   /// totalAmount as-is, unlike cashArrangementFeeAmount below.
-  cashArrangementAmount       Decimal? @db.Decimal(10, 2)
+  cashArrangementAmount       Decimal?      @db.Decimal(10, 2)
   /// Preferred banknote denomination — order-level roll-up is only meaningful for a
   /// single cash line; null when lines differ. The authoritative per-line value is on
   /// OrderItem. Purely informational for fulfilment — never affects price.
   cashArrangementDenomination Int?
   /// Order-level note roll-up — only meaningful for a single cash line; null when lines
   /// differ. The authoritative per-line note is on OrderItem.
-  cashArrangementNote         String?  @db.Text
+  cashArrangementNote         String?       @db.Text
   /// SUM of every line's (per-unit pre-VAT service fee × quantity).
-  cashArrangementFeeAmount    Decimal? @db.Decimal(10, 2)
+  cashArrangementFeeAmount    Decimal?      @db.Decimal(10, 2)
   /// SUM of every line's (per-unit fee VAT × quantity) — already folded into the order's
   /// blended taxAmount above, kept separately for receipts/admin.
-  cashArrangementFeeVatAmount Decimal? @db.Decimal(10, 2)
+  cashArrangementFeeVatAmount Decimal?      @db.Decimal(10, 2)
   /// STANDARD (default, today's behavior) or SCHEDULED (customer picked a future
   /// date/time at checkout).
-  deliveryType          DeliveryType  @default(STANDARD)
+  deliveryType                DeliveryType  @default(STANDARD)
   /// Customer-chosen future delivery date+time. Only set when deliveryType = SCHEDULED;
   /// always null for STANDARD (enforced server-side regardless of client input).
-  scheduledDeliveryAt   DateTime?
+  scheduledDeliveryAt         DateTime?
   /// Snapshot of Region.standardDeliveryDays at checkout time, only set when
   /// deliveryType = STANDARD — so a later change to the region's setting doesn't
   /// retroactively alter this order's displayed ETA (same reasoning as shippingAmount).
-  estimatedDeliveryDays Int?
+  estimatedDeliveryDays       Int?
   /// Resolved STANDARD arrival date as a tz-neutral "YYYY-MM-DD" key, computed in the
   /// order region's timezone at checkout (order day + lead, rolled forward past any
   /// non-delivery weekday / blackout). Displayed directly so the date never drifts with
   /// the viewer's timezone. Null for SCHEDULED orders (they use scheduledDeliveryAt) and
   /// for legacy orders placed before this field existed.
-  estimatedDeliveryDate String?
+  estimatedDeliveryDate       String?
   /// True when this SCHEDULED order was placed for same-day delivery (date = order day,
   /// before the zone/region cutoff). Drives fulfilment prioritisation & reporting.
-  isSameDayDelivery     Boolean       @default(false)
+  isSameDayDelivery           Boolean       @default(false)
   /// When true, Product.quantity has been reduced for this order’s line items (set on PENDING→CONFIRMED; cleared on cancel/revert).
-  inventoryDeducted     Boolean       @default(false)
+  inventoryDeducted           Boolean       @default(false)
   /// Whether placing this order should clear the user's cart. True for normal cart checkout;
   /// false for "Buy Now" (single-product direct purchase) so the cart is left untouched.
-  clearCartOnPayment    Boolean       @default(true)
+  clearCartOnPayment          Boolean       @default(true)
   /// Region the order was placed in (captured from X-Region / the user's region at checkout).
   /// Drives region-scoped analytics. Nullable for legacy orders (backfilled to default region).
-  regionId              String?
+  regionId                    String?
   /// Currency the order was totaled/charged in (e.g. "AED", "SAR") — snapshot of the
   /// order region's currency at placement. Null for legacy orders placed before
   /// multi-currency (treat as the store's default, AED).
-  currency              String?
-  createdAt             DateTime      @default(now())
-  updatedAt             DateTime      @updatedAt
+  currency                    String?
+  createdAt                   DateTime      @default(now())
+  updatedAt                   DateTime      @updatedAt
 
   user         User?       @relation(fields: [userId], references: [id], onDelete: Cascade)
   address      Address?    @relation(fields: [addressId], references: [id], onDelete: SetNull)
@@ -1232,49 +1311,49 @@ model Order {
 }
 
 model OrderItem {
-  id                String   @id @default(uuid())
-  orderId           String
-  productId         String?
+  id                          String        @id @default(uuid())
+  orderId                     String
+  productId                   String?
   /// Snapshot of product title at order/delete time. Keeps order history readable after a product is removed from the catalog.
-  productTitle      String?
-  productTitle_ar   String?
-  quantity          Int
-  perProductMessage String?  @db.Text
-  price             Decimal  @db.Decimal(10, 2)
+  productTitle                String?
+  productTitle_ar             String?
+  quantity                    Int
+  perProductMessage           String?       @db.Text
+  price                       Decimal       @db.Decimal(10, 2)
   /// VAT rate applied to this line (percent). 0/null when the line is untaxed (outside the
   /// VAT scope, or VAT disabled).
-  vatRatePercent    Decimal? @db.Decimal(5, 2)
+  vatRatePercent              Decimal?      @db.Decimal(5, 2)
   /// VAT amount for the whole line (quantity included), order currency. For inclusive VAT
   /// this is the portion already inside `price`; for exclusive it was added on top.
-  vatAmount         Decimal? @db.Decimal(10, 2)
+  vatAmount                   Decimal?      @db.Decimal(10, 2)
   /// Variant chosen at add-to-cart time, snapshotted onto the order line (e.g.
   /// {"Colour":"Pink"}). Null for orders placed before this was captured.
-  selectedOptions   Json?
+  selectedOptions             Json?
   // Gift card / custom name add-on selections, snapshotted at order time.
   // perProductMessage above doubles as the gift card's note when set.
-  giftCardSelected  Boolean  @default(false)
+  giftCardSelected            Boolean       @default(false)
   // Resolved gift-card input mode snapshotted at order time (see CartItem.giftCardMode)
   // so the receipt/order views label the value as "Gift name" vs "Gift message".
-  giftCardMode      GiftCardMode?
-  customName        String?
+  giftCardMode                GiftCardMode?
+  customName                  String?
   /// Resolved "ships within N day(s)" lead time for this line, snapshotted at order
   /// time from the product/category/global chain (see Product.deliveryLeadDays) —
   /// so a later admin change to those settings never retroactively alters a
   /// historical order's displayed lead time. Null for orders placed before this
   /// feature existed.
-  resolvedLeadDays  Int?
+  resolvedLeadDays            Int?
   /// Per-line "add cash arrangement" snapshot, PER UNIT (the line's total contribution is
   /// each × quantity). requested=false + the rest null when this line has no cash arrangement.
   /// amount = raw cash (never VAT'd); feeAmount = the per-unit service fee; feeVatAmount = VAT
   /// on that fee. The Order-level cashArrangement* fields are the roll-up (sum across lines).
-  cashArrangementRequested    Boolean  @default(false)
-  cashArrangementAmount       Decimal? @db.Decimal(10, 2)
+  cashArrangementRequested    Boolean       @default(false)
+  cashArrangementAmount       Decimal?      @db.Decimal(10, 2)
   cashArrangementDenomination Int?
-  cashArrangementNote         String?  @db.Text
-  cashArrangementFeeAmount    Decimal? @db.Decimal(10, 2)
-  cashArrangementFeeVatAmount Decimal? @db.Decimal(10, 2)
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  cashArrangementNote         String?       @db.Text
+  cashArrangementFeeAmount    Decimal?      @db.Decimal(10, 2)
+  cashArrangementFeeVatAmount Decimal?      @db.Decimal(10, 2)
+  createdAt                   DateTime      @default(now())
+  updatedAt                   DateTime      @updatedAt
 
   order   Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product Product? @relation(fields: [productId], references: [id], onDelete: SetNull)

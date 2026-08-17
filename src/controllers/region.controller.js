@@ -1,4 +1,5 @@
 const regionService = require('../services/region.service');
+const legalPageService = require('../services/legalPage.service');
 const { success, error } = require('../utils/response');
 const { allowedRegionIds, isRegionAllowed, assertRegionAllowed } = require('../utils/regionScope');
 
@@ -24,6 +25,11 @@ async function listRegions(req, res, next) {
     if (allowedRegionIds(req) !== null) {
       items = items.filter((r) => isRegionAllowed(req, r.id));
     }
+    // The URL segments of each region's published legal pages — lets the storefront
+    // footer link ONLY pages that actually exist ("hidden until set"). One extra
+    // grouped query for the whole list, not per-region.
+    const slugMap = await legalPageService.publishedSlugMapForRegions(items.map((r) => r.id));
+    items = items.map((r) => ({ ...r, publishedPageSlugs: slugMap[r.id] || [] }));
     return success(res, items, 'Regions fetched successfully', 200, { total: items.length });
   } catch (err) {
     next(err);

@@ -48,6 +48,14 @@ const REGION_SELECT = {
   address_ar: true,
   hours: true,
   hours_ar: true,
+  // per-region social links
+  instagramUrl: true,
+  facebookUrl: true,
+  tiktokUrl: true,
+  threadsUrl: true,
+  snapchatUrl: true,
+  xUrl: true,
+  youtubeUrl: true,
   registrationCity: true,
   registrationCity_ar: true,
   currencyDisplayName: true,
@@ -150,6 +158,28 @@ const LEGAL_FIELD_BASE_NAMES = [
   'standardsAuthority',
 ];
 const LEGAL_FIELDS = LEGAL_FIELD_BASE_NAMES.flatMap((f) => [f, `${f}_ar`]);
+
+/** Per-region social links — all optional plain text (full URLs). */
+const SOCIAL_FIELDS = [
+  'instagramUrl',
+  'facebookUrl',
+  'tiktokUrl',
+  'threadsUrl',
+  'snapchatUrl',
+  'xUrl',
+  'youtubeUrl',
+];
+
+/** Builds the { field: trimOrNull(value) } payload for social links present in
+ *  `data`. `onlyDefined` (update) skips fields the caller didn't send. */
+function buildSocialFieldsPayload(data, { onlyDefined = false } = {}) {
+  const payload = {};
+  for (const f of SOCIAL_FIELDS) {
+    if (onlyDefined && data[f] === undefined) continue;
+    payload[f] = trimOrNull(data[f]);
+  }
+  return payload;
+}
 
 /** Throws VALIDATION if any of the 18 legal fields is missing/blank. */
 function assertLegalFieldsComplete(data) {
@@ -305,7 +335,10 @@ async function createRegion(data) {
   if (!code) throw Object.assign(new Error('Region code is required'), { code: 'VALIDATION' });
   const name = String(data.name ?? '').trim();
   if (!name) throw Object.assign(new Error('Region name is required'), { code: 'VALIDATION' });
-  assertLegalFieldsComplete(data);
+  // Legal-citation fields are OPTIONAL at creation — legal pages are now authored
+  // per region in a rich-text editor (RegionLegalPage), so a region no longer needs
+  // its law citations set up front just to render a page. They remain available as
+  // seed values for the admin editor's "Load default template" action.
   const blackoutRows = parseBlackoutDates(data.blackoutDates);
 
   const region = await prisma.$transaction(async (tx) => {
@@ -332,6 +365,7 @@ async function createRegion(data) {
         hours: trimOrNull(data.hours),
         hours_ar: trimOrNull(data.hours_ar),
         ...buildLegalFieldsPayload(data),
+        ...buildSocialFieldsPayload(data),
         ...buildRegionDeliveryConfigPayload(data, { partial: false }),
         ...(blackoutRows.length ? { blackoutDates: { create: blackoutRows } } : {}),
         isDefault: makeDefault,
@@ -417,6 +451,7 @@ async function updateRegion(id, data) {
   if (data.hours !== undefined) payload.hours = trimOrNull(data.hours);
   if (data.hours_ar !== undefined) payload.hours_ar = trimOrNull(data.hours_ar);
   Object.assign(payload, buildLegalFieldsPayload(data, { onlyDefined: true }));
+  Object.assign(payload, buildSocialFieldsPayload(data, { onlyDefined: true }));
   Object.assign(payload, buildRegionDeliveryConfigPayload(data, { partial: true }));
   if (data.isActive !== undefined) payload.isActive = !!data.isActive;
   if (data.sortOrder !== undefined) payload.sortOrder = Number(data.sortOrder);

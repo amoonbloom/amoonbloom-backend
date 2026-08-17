@@ -37,6 +37,21 @@ const legalFieldsOptionalValidation = LEGAL_FIELD_BASE_NAMES.flatMap((f) => [
   body(`${f}_ar`).optional({ nullable: true }).isString().trim(),
 ]);
 
+// Per-region social links — all optional (full URLs). Shared by create + update.
+const SOCIAL_FIELD_NAMES = [
+  'instagramUrl',
+  'facebookUrl',
+  'tiktokUrl',
+  'threadsUrl',
+  'snapchatUrl',
+  'xUrl',
+  'youtubeUrl',
+];
+const socialFieldsValidation = SOCIAL_FIELD_NAMES.map((f) =>
+  body(f).optional({ nullable: true }).isString().trim().isLength({ max: 500 })
+    .withMessage(`${f} must be a string up to 500 characters`)
+);
+
 // City-level delivery config — shared by create and update (all optional). The service
 // (region.service.js) does the authoritative parsing/normalisation; these give clean 400s.
 const deliveryConfigValidation = [
@@ -77,7 +92,8 @@ const createValidation = [
     .withMessage('iso2 must be a 2-letter country code (e.g. AE, SA)'),
   body('urlSlug').optional({ nullable: true }).isString().trim().matches(/^[a-z0-9-]+$/)
     .withMessage('urlSlug must be lowercase letters, numbers and hyphens (e.g. ae, sa)'),
-  ...legalFieldsRequiredValidation,
+  ...legalFieldsOptionalValidation,
+  ...socialFieldsValidation,
   ...deliveryConfigValidation,
   body('isDefault').optional().isBoolean(),
   body('isActive').optional().isBoolean(),
@@ -102,6 +118,7 @@ const updateValidation = [
   body('urlSlug').optional({ nullable: true }).isString().trim().matches(/^[a-z0-9-]+$/)
     .withMessage('urlSlug must be lowercase letters, numbers and hyphens (e.g. ae, sa)'),
   ...legalFieldsOptionalValidation,
+  ...socialFieldsValidation,
   ...deliveryConfigValidation,
   body('isDefault').optional().isBoolean(),
   body('isActive').optional().isBoolean(),
