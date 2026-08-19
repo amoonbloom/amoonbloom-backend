@@ -29,7 +29,7 @@ const orderProductInclude = {
   images: { orderBy: { sortOrder: 'asc' } },
   descriptions: { orderBy: { sortOrder: 'asc' } },
   productOptions: { orderBy: { sortOrder: 'asc' } },
-  variants: { orderBy: { sortOrder: 'asc' } },
+  variants: { orderBy: { sortOrder: 'asc' }, include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } } },
 };
 
 function mapProductForDisplay(product) {
@@ -531,7 +531,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       categoryId: true,
       price: true,
       discountedPrice: true,
-      regions: { where: { regionId: orderRegionId }, select: { price: true, discountedPrice: true } },
+      regions: { where: { regionId: orderRegionId }, select: { price: true, discountedPrice: true, comingSoon: true } },
       quantity: true,
       giftCardEnabled: true,
       giftCardExtraPrice: true,
@@ -545,11 +545,26 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       // Prep/booking lead-time override chain (see prisma/schema.prisma) — resolved and
       // snapshotted per line below as OrderItem.resolvedLeadDays.
       deliveryLeadDays: true,
-      category: { select: { id: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+      category: {
+        select: {
+          id: true,
+          deliveryLeadDays: true,
+          comingSoon: true,
+          giftCardMode: true,
+          regions: { where: { regionId: orderRegionId }, select: { comingSoon: true } },
+        },
+      },
       // Needed (with `variants`) to resolve a variant-priced line's effective price —
       // see resolveEffectivePrice/resolveVariantPricing in product.service.js.
       productOptions: { orderBy: { sortOrder: 'asc' } },
-      variants: { orderBy: { sortOrder: 'asc' } },
+      variants: { orderBy: { sortOrder: 'asc' }, include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } } },
+      // Released from the category coming-soon cascade if curated into a published
+      // "sell coming-soon" section (a product's OWN coming-soon still blocks).
+      sectionProducts: {
+        where: { excluded: false, section: { releaseComingSoon: true, status: 'PUBLISHED' } },
+        take: 1,
+        select: { id: true },
+      },
     },
   });
   const productById = new Map(productRows.map((p) => [p.id, p]));
@@ -709,8 +724,17 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     if (!p) {
       return { order: null, error: 'A product in your order is no longer available' };
     }
-    // Coming-soon items (own flag or inherited from their category) can't be ordered.
-    if (p.comingSoon || p.category?.comingSoon) {
+    // Coming-soon items can't be ordered. Region-aware: use THIS order's region flags
+    // (product's own OR its category's, both scoped to orderRegionId) so a product that's
+    // a teaser in one region is still orderable in another. Falls back to the global flag
+    // when the order has no region (shouldn't happen post-resolution).
+    const pComingSoon = orderRegionId ? Boolean(p.regions?.[0]?.comingSoon) : Boolean(p.comingSoon);
+    const cComingSoon = orderRegionId
+      ? Boolean(p.category?.regions?.[0]?.comingSoon)
+      : Boolean(p.category?.comingSoon);
+    // Released products (curated into a "sell coming-soon" section) ignore the category cascade.
+    const released = (p.sectionProducts?.length ?? 0) > 0;
+    if (pComingSoon || (cComingSoon && !released)) {
       return { order: null, error: `${p.title} is coming soon and cannot be ordered yet` };
     }
     if (p.quantity < requested) {
@@ -740,7 +764,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // scoped to orderRegionId by the select above.
   function livePrice(productRow, selectedOptions) {
     if (!productRow) return 0;
-    return productService.resolveEffectivePrice(productRow, selectedOptions);
+    return productService.resolveEffectivePrice(productRow, selectedOptions, orderRegionId);
   }
   // Effective per-unit price INCLUDING this line's gift-card/custom-name add-ons —
   // depends on the LINE's own selection, not just the product. Keyed by line INDEX
@@ -822,7 +846,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
         customNameEnabled: true,
         customNamePrice: true,
         productOptions: { orderBy: { sortOrder: 'asc' } },
-        variants: { orderBy: { sortOrder: 'asc' } },
+        variants: { orderBy: { sortOrder: 'asc' }, include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } } },
       },
     });
     const txProductById = new Map(livePriceRows.map((p) => [p.id, p]));
@@ -836,7 +860,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     const txPriceByIndex = sanitizedLineItems.map((item) => {
       const p = txProductById.get(item.productId);
       if (!p) return null;
-      const base = productService.resolveEffectivePrice(p, item.selectedOptions);
+      const base = productService.resolveEffectivePrice(p, item.selectedOptions, orderRegionId);
       const extra = productService.optionExtraCharge(p, { giftCardSelected: item.giftCardSelected, customName: item.customName });
       return base + extra;
     });
@@ -1395,9 +1419,8 @@ async function buyNow(userId, input = {}, opts = {}) {
   if (!product || product.status !== 'PUBLISHED') {
     return { order: null, error: 'Product is not available for purchase' };
   }
-  if (product.comingSoon || product.category?.comingSoon) {
-    return { order: null, error: 'This product is coming soon and cannot be ordered yet' };
-  }
+  // Coming-soon is enforced region-aware inside createOrderCore below (the global flag
+  // here would false-block a product that's a teaser in one region but live in another).
 
   return createOrderCore(
     userId,
@@ -1484,9 +1507,8 @@ async function createGuestOrder(guestInput = {}, opts = {}) {
     if (!p || p.status !== 'PUBLISHED') {
       return { order: null, error: 'A product in your order is no longer available' };
     }
-    if (p.comingSoon || p.category?.comingSoon) {
-      return { order: null, error: 'A product in your order is coming soon and cannot be ordered yet' };
-    }
+    // Coming-soon is enforced region-aware inside createOrderCore (the global flag here
+    // would false-block a product that's a teaser in one region but live in another).
   }
 
   const guestContact = {
@@ -2149,6 +2171,9 @@ async function initiateOrderPayment(orderId, userId) {
       shippingFullName: true,
       shippingPhone: true,
       user: { select: { email: true } },
+      // region.code selects the gateway profile; cardPaymentEnabled gates the hosted
+      // page (which is the card entry point for the /pay flow).
+      region: { select: { code: true, cardPaymentEnabled: true } },
     },
   });
 
@@ -2160,12 +2185,17 @@ async function initiateOrderPayment(orderId, userId) {
   // Payable only while awaiting payment (covers first attempt and retry after a failed one).
   if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
   if (Number(order.totalAmount) <= 0) return { error: 'Order total must be greater than zero' };
+  // The hosted page is where cards are entered, so it requires card payment to be enabled
+  // for the region. (Apple Pay has its own session endpoints gated by applePayEnabled.)
+  if (order.region && order.region.cardPaymentEnabled === false) {
+    return { error: 'Card payment isn’t available for this region.' };
+  }
 
-  const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(order, {
-    name: order.shippingFullName,
-    phone: order.shippingPhone,
-    email: order.user?.email,
-  });
+  const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(
+    order,
+    { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email },
+    { regionCode: order.region?.code || null }
+  );
 
   // Store the new invoice id and reset paymentStatus to UNPAID so a retry after a
   // previous FAILED attempt starts clean.
@@ -2185,15 +2215,23 @@ async function initiateOrderPayment(orderId, userId) {
 async function createPaymentSession(orderId, userId) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, userId },
-    select: { id: true, status: true, paymentStatus: true, paymentMethod: true, totalAmount: true },
+    select: {
+      id: true, status: true, paymentStatus: true, paymentMethod: true, totalAmount: true,
+      region: { select: { code: true, applePayEnabled: true } },
+    },
   });
   if (!order) return { error: 'Order not found' };
   if (order.paymentMethod !== 'MYFATOORAH') return { error: 'This order is not set up for online payment' };
   if (order.paymentStatus === 'PAID') return { error: 'Order is already paid' };
   if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
   if (Number(order.totalAmount) <= 0) return { error: 'Order total must be greater than zero' };
+  // The session flow is the Apple Pay entry point (mobile native + web embedded button),
+  // so it requires Apple Pay to be enabled for the region.
+  if (order.region && order.region.applePayEnabled === false) {
+    return { error: 'Apple Pay isn’t available for this region.' };
+  }
 
-  const session = await paymentService.initiateSession();
+  const session = await paymentService.initiateSession(order.region?.code || null);
   return { sessionId: session.sessionId, countryCode: session.countryCode };
 }
 
@@ -2218,12 +2256,17 @@ async function executeOrderPayment(orderId, userId, sessionId) {
       shippingFullName: true,
       shippingPhone: true,
       user: { select: { email: true } },
+      region: { select: { code: true, applePayEnabled: true } },
     },
   });
   if (!order) return { error: 'Order not found' };
   if (order.paymentMethod !== 'MYFATOORAH') return { error: 'This order is not set up for online payment' };
   if (order.paymentStatus === 'PAID') return { isPaid: true, orderId, status: 'Paid', alreadyProcessed: true };
   if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
+  // Same Apple Pay gate as session creation (this executes the Apple Pay charge).
+  if (order.region && order.region.applePayEnabled === false) {
+    return { error: 'Apple Pay isn’t available for this region.' };
+  }
 
   // Double-charge guard (H5). ExecutePayment is NOT idempotent — a double-tap (or retry
   // while the first charge is still in flight) could charge the card twice. Atomically
@@ -2249,6 +2292,7 @@ async function executeOrderPayment(orderId, userId, sessionId) {
       sessionId,
       order,
       customer: { name: order.shippingFullName, email: order.user?.email, phone: order.shippingPhone },
+      regionCode: order.region?.code || null,
     });
 
     if (!exec.invoiceId) {
@@ -2263,7 +2307,8 @@ async function executeOrderPayment(orderId, userId, sessionId) {
     await prisma.order.update({ where: { id: orderId }, data: { paymentInvoiceId: exec.invoiceId } });
 
     // Authoritative server-side confirmation (idempotent; places order + advances status on Paid).
-    const result = await confirmOrderPayment(exec.invoiceId, 'InvoiceId');
+    // Pass the region so the confirm re-verifies against the SAME gateway we just charged on.
+    const result = await confirmOrderPayment(exec.invoiceId, 'InvoiceId', order.region?.code || null);
     // paymentUrl is set for non-direct methods (e.g. a card needing 3-D Secure); for Apple
     // Pay it is normally null because the charge settles directly.
     return { ...result, paymentUrl: exec.paymentUrl || null, isDirectPayment: exec.isDirectPayment };
@@ -2352,8 +2397,8 @@ async function finalizePaidOrder(order, { firstPlacement } = {}) {
  *
  * Returns { isPaid, orderId, status, ...flags }.
  */
-async function confirmOrderPayment(key, keyType = 'PaymentId') {
-  const result = await paymentService.verifyPayment(key, keyType);
+async function confirmOrderPayment(key, keyType = 'PaymentId', regionCode = null) {
+  const result = await paymentService.verifyPayment(key, keyType, regionCode);
   const orderId = result.orderId;
 
   if (!orderId) {
@@ -2367,6 +2412,7 @@ async function confirmOrderPayment(key, keyType = 'PaymentId') {
       orderNumber: true,
       userId: true,
       totalAmount: true,
+      currency: true,
       status: true,
       paymentStatus: true,
       clearCartOnPayment: true,
@@ -2407,7 +2453,9 @@ async function confirmOrderPayment(key, keyType = 'PaymentId') {
   // a partial/tampered payment and must never deliver goods. We withhold confirmation and
   // mark the order for manual review. We only enforce this when the currencies match, so a
   // legitimate cross-currency payer (different numeric value) is never wrongly stranded.
-  const chargedCurrency = process.env.MYFATOORAH_CURRENCY || 'AED';
+  // Compare against the ORDER's own currency (region-aware) — NOT a global env — so a
+  // legitimate SAR payment on a Saudi order isn't wrongly flagged against a hardcoded AED.
+  const chargedCurrency = order.currency || 'AED';
   const currencyKnown = !!result.currency;
   const sameCurrency = currencyKnown && result.currency === chargedCurrency;
   const underpaid =
@@ -2580,7 +2628,7 @@ async function quoteOrder(userId, input = {}, opts = {}) {
       customNameEnabled: true,
       customNamePrice: true,
       productOptions: { orderBy: { sortOrder: 'asc' } },
-      variants: { orderBy: { sortOrder: 'asc' } },
+      variants: { orderBy: { sortOrder: 'asc' }, include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } } },
     },
   });
   const productById = new Map(productRows.map((p) => [p.id, p]));
@@ -2589,7 +2637,7 @@ async function quoteOrder(userId, input = {}, opts = {}) {
 
   const pricedLines = items.map((it) => {
     const p = productById.get(it.productId);
-    const base = productService.resolveEffectivePrice(p, it.selectedOptions);
+    const base = productService.resolveEffectivePrice(p, it.selectedOptions, orderRegionId);
     const extra = productService.optionExtraCharge(p, {
       giftCardSelected: it.giftCardSelected,
       customName: it.customName,

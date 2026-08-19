@@ -15,6 +15,9 @@ async function addToCart(req, res, next) {
   try {
     const userId = req.userId;
     const { productId, quantity, message, selectedOptions, giftCardSelected, customName, cashArrangement } = req.body;
+    // Region resolved up front so the coming-soon guard is region-aware (a product can
+    // be a teaser in one region and orderable in another).
+    const region = await regionFromReq(req);
     const { cart, error: errMsg } = await cartService.addToCart(userId, {
       productId,
       quantity,
@@ -23,9 +26,9 @@ async function addToCart(req, res, next) {
       giftCardSelected,
       customName,
       cashArrangement,
+      regionId: region?.id || null,
     });
     if (errMsg) return error(res, errMsg, 404);
-    const region = await regionFromReq(req);
     const data = await cartService.getCart(userId, region?.currency || 'AED', region?.id || null);
     return success(res, data, 'Product added to cart', 200);
   } catch (err) {

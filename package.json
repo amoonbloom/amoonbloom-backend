@@ -18,6 +18,7 @@
     "test:promo": "node scripts/test-promo-codes.js",
     "test:permissions": "node scripts/manager-permissions-test.js",
     "test:region-scope": "node scripts/test-region-scope.js",
+    "test:payment-region": "node -r dotenv/config scripts/payment-region-verify.js",
     "test:region-content": "node scripts/legal-pages-branches-verify.js",
     "test:region-content-http": "node -r dotenv/config scripts/legal-branches-http-sqa.js",
     "test:search": "node scripts/search-verify.js",

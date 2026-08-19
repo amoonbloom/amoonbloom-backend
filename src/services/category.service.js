@@ -28,6 +28,13 @@ const REGION_INCLUDE = {
   },
 };
 
+// Storefront (non-staff) include: just the requesting region's own coming-soon row
+// (no nested `region` tag, so mapCategory takes the storefront overlay branch). Empty
+// object when there's no region context (mapCategory then keeps the global flag).
+function categoryRegionComingSoonInclude(regionId) {
+  return regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {};
+}
+
 function normalizeStatus(value, fallback = 'DRAFT') {
   if (value === undefined || value === null) return fallback;
   const v = String(value).trim().toUpperCase();
@@ -48,6 +55,23 @@ async function resolveWriteRegionIds(regionIds) {
   return def ? [def.id] : [];
 }
 
+/**
+ * Which of `regionIds` this category is "coming soon" in. Prefers the new
+ * per-region `comingSoonRegionIds` (a subset of the category's regions); falls
+ * back to the legacy global `comingSoon` boolean (true = coming-soon in ALL its
+ * regions) so older admin clients keep working. Empty unless PUBLISHED (a draft
+ * is already hidden, so coming-soon is meaningless there).
+ */
+function resolveComingSoonRegionSet(data, regionIds, status) {
+  if (status !== 'PUBLISHED') return new Set();
+  const allowed = new Set(regionIds);
+  if (Array.isArray(data.comingSoonRegionIds)) {
+    return new Set(data.comingSoonRegionIds.filter((id) => allowed.has(id)));
+  }
+  if (data.comingSoon === true) return new Set(regionIds);
+  return new Set();
+}
+
 /** Shape a category row (with regions/_count includes) for API output. */
 function mapCategory(category) {
   if (!category) return null;
@@ -65,11 +89,21 @@ function mapCategory(category) {
     cashArrangementFeeStepAmount: decimalToNumber(cashArrangementFeeStepAmount),
     cashArrangementFeeMarginPercent: decimalToNumber(cashArrangementFeeMarginPercent),
   };
-  // Region tags only attached for staff reads (storefront doesn't need them).
+  // `regions` has two shapes: staff reads (REGION_INCLUDE) carry a nested `region`
+  // tag; storefront reads carry only the requesting region's scalar row (no `region`).
   if (Array.isArray(regions)) {
+    const hasRegionTags = regions.some((r) => r.region);
+    if (!hasRegionTags) {
+      // Storefront: overlay THIS region's coming-soon onto the returned flag, so a
+      // category can be a teaser in one region and live in another.
+      out.comingSoon = Boolean(regions[0]?.comingSoon);
+      return out;
+    }
     const regionList = regions.map((r) => r.region).filter(Boolean);
     out.regions = regionList;
     out.regionIds = regionList.map((r) => r.id);
+    // Which regions this category is a coming-soon teaser in (for the admin edit form).
+    out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
     // Per-region "ships within N days" + cash-arrangement fee overrides, so the admin
     // edit form can show and edit a different value per region. Additive alongside the tags.
     out.regionLeadDays = regions.map((r) => ({
@@ -156,6 +190,8 @@ async function createCategory(data) {
   const regionLeadMap = buildCategoryRegionLeadMap(data.regionLeadDays);
   // Optional PER-ZONE overrides (highest precedence).
   const zoneLeadRows = buildCategoryZoneLeadRows(data.zoneLeadDays);
+  // Which regions this category is a "coming soon" teaser in (per-region, default none).
+  const comingSoonSet = resolveComingSoonRegionSet(data, regionIds, status);
 
   const draft = {
     title: data.title ?? null,
@@ -175,9 +211,10 @@ async function createCategory(data) {
       image: data.image ?? null,
       totalProducts: 0,
       status,
-      // Coming-soon is meaningful only on a visible (PUBLISHED) category; never persist
-      // a DRAFT+comingSoon combo (draft is already hidden).
-      comingSoon: status === 'PUBLISHED' ? !!data.comingSoon : false,
+      // Global mirror = "coming soon in at least one region" (drives the admin list
+      // badge + legacy/global consumers). The authoritative per-region state lives on
+      // the CategoryRegion rows below; storefront reads resolve the region's own value.
+      comingSoon: comingSoonSet.size > 0,
       giftCardMode: normalizeGiftCardMode(data.giftCardMode),
       draftScope,
       deliveryLeadDays,
@@ -193,6 +230,7 @@ async function createCategory(data) {
                   deliveryLeadDays: rl?.deliveryLeadDays ?? null,
                   cashArrangementFeeStepAmount: rl?.cashArrangementFeeStepAmount ?? null,
                   cashArrangementFeeMarginPercent: rl?.cashArrangementFeeMarginPercent ?? null,
+                  comingSoon: comingSoonSet.has(regionId),
                 };
               }),
             },
@@ -214,6 +252,10 @@ async function updateCategory(id, data) {
   if (data.description_ar !== undefined) draft.description_ar = data.description_ar;
   await autoTranslate(draft, CATEGORY_BILINGUAL);
 
+  // Per-region coming-soon is being (re)set when the admin sends comingSoonRegionIds
+  // (new) or the legacy global comingSoon boolean.
+  const comingSoonExplicit = data.comingSoonRegionIds !== undefined || data.comingSoon !== undefined;
+
   const newRegionIds = data.regionIds !== undefined
     ? await regionService.assertValidRegionIds(Array.isArray(data.regionIds) ? data.regionIds : [])
     : null;
@@ -226,6 +268,8 @@ async function updateCategory(id, data) {
   const wantRegionRewrite = data.regionIds !== undefined || data.regionLeadDays !== undefined;
   let existingCatRegionLead = new Map();
   let existingCatRegionIds = [];
+  // Existing per-region coming-soon, so a regionIds/lead rewrite preserves it.
+  let existingCatComingSoon = new Map();
   if (wantRegionRewrite) {
     const rows = await prisma.categoryRegion.findMany({
       where: { categoryId: id },
@@ -234,6 +278,7 @@ async function updateCategory(id, data) {
         deliveryLeadDays: true,
         cashArrangementFeeStepAmount: true,
         cashArrangementFeeMarginPercent: true,
+        comingSoon: true,
       },
     });
     existingCatRegionLead = new Map(rows.map((r) => [r.regionId, {
@@ -241,12 +286,14 @@ async function updateCategory(id, data) {
       cashArrangementFeeStepAmount: decimalToNumber(r.cashArrangementFeeStepAmount),
       cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
     }]));
+    existingCatComingSoon = new Map(rows.map((r) => [r.regionId, !!r.comingSoon]));
     existingCatRegionIds = rows.map((r) => r.regionId);
   }
 
   // Fetch existing status/draftScope so a malformed value falls back to the current
-  // one instead of silently resetting (status -> DRAFT, draftScope -> HOME_ONLY).
-  const existing = data.status !== undefined || data.draftScope !== undefined
+  // one instead of silently resetting (status -> DRAFT, draftScope -> HOME_ONLY). Also
+  // needed to know the effective status when reconciling per-region coming-soon.
+  const existing = data.status !== undefined || data.draftScope !== undefined || comingSoonExplicit
     ? await prisma.category.findUnique({ where: { id }, select: { status: true, draftScope: true } })
     : null;
 
@@ -260,14 +307,8 @@ async function updateCategory(id, data) {
         ...(draft.description_ar !== undefined && { description_ar: draft.description_ar ?? null }),
         ...(data.image !== undefined && { image: data.image }),
         ...(data.status !== undefined && { status: normalizeStatus(data.status, existing?.status) }),
-        // comingSoon only applies while PUBLISHED; drafting the category forces it off.
-        ...((data.comingSoon !== undefined || data.status !== undefined) && (() => {
-          const effectiveStatus =
-            data.status !== undefined ? normalizeStatus(data.status, existing?.status) : existing?.status;
-          if (effectiveStatus !== 'PUBLISHED') return { comingSoon: false };
-          if (data.comingSoon !== undefined) return { comingSoon: !!data.comingSoon };
-          return {};
-        })()),
+        // Per-region coming-soon (incl. the global `comingSoon` mirror) is reconciled
+        // AFTER the region rows below — see the coming-soon block at the end of the tx.
         ...(data.draftScope !== undefined && { draftScope: normalizeDraftScope(data.draftScope, existing?.draftScope) }),
         // Category-default gift-card mode. Omit to leave untouched; send null/'' to clear
         // the default (products fall through to MESSAGE).
@@ -308,12 +349,42 @@ async function updateCategory(id, data) {
               deliveryLeadDays: rl?.deliveryLeadDays ?? null,
               cashArrangementFeeStepAmount: rl?.cashArrangementFeeStepAmount ?? null,
               cashArrangementFeeMarginPercent: rl?.cashArrangementFeeMarginPercent ?? null,
+              // Preserve this region's coming-soon across a regionIds/lead rewrite; a
+              // brand-new region defaults to false (available). The explicit coming-soon
+              // reconcile below then applies any comingSoonRegionIds change.
+              comingSoon: existingCatComingSoon.get(regionId) ?? false,
             };
           }),
           skipDuplicates: true,
         });
       }
     }
+
+    // Reconcile per-region coming-soon when the admin changed it (comingSoonRegionIds /
+    // legacy comingSoon) or changed status (drafting forces it off). Targeted updateMany
+    // so we don't need to also rewrite the region rows.
+    if (comingSoonExplicit || data.status !== undefined) {
+      const effectiveStatus =
+        data.status !== undefined ? normalizeStatus(data.status, existing?.status) : existing?.status;
+      const currentRows = await tx.categoryRegion.findMany({ where: { categoryId: id }, select: { regionId: true } });
+      const currentRegionIds = currentRows.map((r) => r.regionId);
+      let comingSoonSet;
+      if (effectiveStatus !== 'PUBLISHED') comingSoonSet = new Set(); // draft clears all
+      else if (comingSoonExplicit) comingSoonSet = resolveComingSoonRegionSet(data, currentRegionIds, effectiveStatus);
+      else comingSoonSet = null; // published + status-only change (no coming-soon fields) → preserve
+      if (comingSoonSet !== null) {
+        await tx.categoryRegion.updateMany({ where: { categoryId: id }, data: { comingSoon: false } });
+        if (comingSoonSet.size > 0) {
+          await tx.categoryRegion.updateMany({
+            where: { categoryId: id, regionId: { in: [...comingSoonSet] } },
+            data: { comingSoon: true },
+          });
+        }
+        // Keep the global mirror in step with "coming soon in at least one region".
+        await tx.category.update({ where: { id }, data: { comingSoon: comingSoonSet.size > 0 } });
+      }
+    }
+
     // Per-zone lead overrides: full replace when the key was sent.
     if (zoneLeadRows !== null) {
       await tx.categoryZone.deleteMany({ where: { categoryId: id } });
@@ -352,7 +423,10 @@ async function getAllCategories(visibility = {}) {
   const categories = await prisma.category.findMany({
     where: buildVisibilityWhere(visibility),
     orderBy: { createdAt: 'desc' },
-    include: { ...(visibility.isStaff ? REGION_INCLUDE : {}), _count: { select: { products: true } } },
+    include: {
+      ...(visibility.isStaff ? REGION_INCLUDE : categoryRegionComingSoonInclude(visibility.regionId)),
+      _count: { select: { products: true } },
+    },
   });
   return categories.map(mapCategory);
 }
@@ -365,7 +439,7 @@ async function getCategoryById(id, includeProducts = false, visibility = {}) {
   const hasFilter = Object.keys(contentWhere).length > 0;
   const isStaff = !!visibility.isStaff;
   const include = {
-    ...(visibility.isStaff ? REGION_INCLUDE : {}),
+    ...(visibility.isStaff ? REGION_INCLUDE : categoryRegionComingSoonInclude(visibility.regionId)),
     _count: { select: { products: true } },
     ...(includeProducts
       ? {

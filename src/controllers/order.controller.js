@@ -346,11 +346,15 @@ ${orderId ? `<p style="color:#666">Order: ${orderId}</p>` : ''}
 // from the real status. This is the authoritative confirmation step.
 async function handlePaymentReturn(req, res) {
   const paymentId = req.query.paymentId || req.query.PaymentId || req.query.Id;
+  // Region tag we appended to the CallBackUrl (?region=…) so we re-verify against the SAME
+  // gateway the invoice was created on. Absent/unknown falls back to the base gateway
+  // (correct while regions share one gateway; required once a region gets its own server).
+  const regionCode = req.query.region ? String(req.query.region) : null;
   if (!paymentId) {
     return res.status(400).type('html').send(paymentResultPage(false, null));
   }
   try {
-    const result = await orderService.confirmOrderPayment(paymentId);
+    const result = await orderService.confirmOrderPayment(paymentId, 'PaymentId', regionCode);
     return res.status(200).type('html').send(paymentResultPage(result.isPaid, result.orderId));
   } catch (err) {
     console.error('[payment] return handler error:', err.message);
@@ -375,7 +379,10 @@ async function paymentWebhook(req, res) {
     const body = req.body || {};
     const signature = req.get('myfatoorah-signature') || req.get('MyFatoorah-Signature');
     const rawBody = req.rawBody ? req.rawBody.toString('utf8') : JSON.stringify(body);
-    if (!paymentService.verifyWebhookSignature(rawBody, signature)) {
+    // Region tag on the webhook URL (?region=…), same purpose as on the callback: resolve
+    // the correct gateway for signature verification + GetPaymentStatus. Null = base gateway.
+    const regionCode = req.query.region ? String(req.query.region) : null;
+    if (!paymentService.verifyWebhookSignature(rawBody, signature, regionCode)) {
       console.warn('[payment] webhook signature check failed');
       return res.status(401).json({ received: false });
     }
@@ -385,9 +392,9 @@ async function paymentWebhook(req, res) {
     const paymentId = data.PaymentId || data.paymentId;
 
     if (paymentId) {
-      await orderService.confirmOrderPayment(String(paymentId), 'PaymentId');
+      await orderService.confirmOrderPayment(String(paymentId), 'PaymentId', regionCode);
     } else if (invoiceId) {
-      await orderService.confirmOrderPayment(String(invoiceId), 'InvoiceId');
+      await orderService.confirmOrderPayment(String(invoiceId), 'InvoiceId', regionCode);
     } else {
       console.warn('[payment] webhook had no InvoiceId/PaymentId');
     }

@@ -39,6 +39,8 @@ const REGION_SELECT = {
   sameDayCutoff: true,
   codEnabled: true,
   onlinePaymentEnabled: true,
+  applePayEnabled: true,
+  cardPaymentEnabled: true,
   iso2: true,
   urlSlug: true,
   contactEmail: true,
@@ -105,6 +107,11 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
   set('codEnabled', data.codEnabled != null, parseBool(data.codEnabled, true));
   set('onlinePaymentEnabled', data.onlinePaymentEnabled != null, parseBool(data.onlinePaymentEnabled, false));
+  // applePayEnabled/cardPaymentEnabled are non-nullable columns defaulting to true; on a
+  // partial update a stray null means "leave unchanged" (gate on != null), matching the
+  // codEnabled/sameDayEnabled convention above.
+  set('applePayEnabled', data.applePayEnabled != null, parseBool(data.applePayEnabled, true));
+  set('cardPaymentEnabled', data.cardPaymentEnabled != null, parseBool(data.cardPaymentEnabled, true));
   return payload;
 }
 

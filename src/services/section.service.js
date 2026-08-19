@@ -96,7 +96,17 @@ function sectionProductInclude(isStaff) {
     images: { orderBy: { sortOrder: 'asc' } },
     descriptions: { orderBy: { sortOrder: 'asc' } },
     productOptions: { orderBy: { sortOrder: 'asc' } },
-    ...(isStaff ? SECTION_REGION_INCLUDE : {}),
+    ...(isStaff
+      ? SECTION_REGION_INCLUDE
+      : {
+          // Storefront: is this product released from the category coming-soon cascade
+          // (curated into a published "sell coming-soon" section)? mapProduct uses it.
+          sectionProducts: {
+            where: { excluded: false, section: { releaseComingSoon: true, status: 'PUBLISHED' } },
+            take: 1,
+            select: { id: true },
+          },
+        }),
   };
 }
 
@@ -189,6 +199,8 @@ function mapSection(s, visibility = {}) {
     image: s.image ?? null,
     sortOrder: s.sortOrder,
     status: s.status,
+    // Sell curated products even if their category is coming-soon (see schema).
+    releaseComingSoon: !!s.releaseComingSoon,
     // Not staff-gated (unlike regions/regionIds below) — the storefront needs this
     // to build the right "View all" link for a Best Sellers/New Arrivals rail.
     kind: s.kind ?? 'CUSTOM',
@@ -417,6 +429,7 @@ async function createSection(data) {
       image: data.image != null ? String(data.image).trim() || null : null,
       sortOrder: data.sortOrder != null ? Number(data.sortOrder) : maxOrder,
       status,
+      releaseComingSoon: data.releaseComingSoon === undefined ? false : !!data.releaseComingSoon,
       kind,
       desktopLayout,
       desktopColumns,
@@ -475,6 +488,7 @@ async function updateSection(id, data) {
   if (data.image !== undefined) updatePayload.image = data.image ? String(data.image).trim() : null;
   if (data.sortOrder !== undefined) updatePayload.sortOrder = Number(data.sortOrder);
   if (data.status !== undefined) updatePayload.status = normalizeStatus(data.status, existing.status);
+  if (data.releaseComingSoon !== undefined) updatePayload.releaseComingSoon = !!data.releaseComingSoon;
   if (data.kind !== undefined) updatePayload.kind = normalizeKind(data.kind, existing.kind);
   if (data.desktopLayout !== undefined) updatePayload.desktopLayout = normalizeLayout(data.desktopLayout, existing.desktopLayout);
   if (data.mobileLayout !== undefined) updatePayload.mobileLayout = normalizeLayout(data.mobileLayout, existing.mobileLayout);

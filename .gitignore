@@ -7,7 +7,6 @@ node_modules
 nul
 temp_auto_push.bat
 temp_interactive_push.bat
-.env
 
 .report-previews/
 config.bat

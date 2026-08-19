@@ -155,25 +155,52 @@ function orderedVariants(product) {
   const list = product.variants && Array.isArray(product.variants)
     ? [...product.variants].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0))
     : [];
-  return list.map((v) => ({
-    id: v.id,
-    optionValue: v.optionValue,
-    optionValue_ar: v.optionValue_ar ?? null,
-    price: decimalToNumber(v.price),
-    discountedPrice: decimalToNumber(v.discountedPrice),
-    images: Array.isArray(v.images) ? v.images : [],
-    subtitle: v.subtitle ?? null,
-    subtitle_ar: v.subtitle_ar ?? null,
-    isDefault: !!v.isDefault,
-    sortOrder: v.sortOrder,
-    // This variant's own description blocks. Empty = it has none of its own and
-    // shares the product's top-level `descriptions` instead — storefront picks
-    // whichever list is non-empty for the selected variant (variant own > shared).
-    descriptions: orderedDescriptions(v.descriptions),
-    // This variant's own colour choices. Empty = this size offers no colour picker
-    // at all (most products) — see ProductVariantColor.
-    colors: orderedVariantColors(v),
-  }));
+  return list.map((v) => {
+    const rpRows = Array.isArray(v.regionPrices) ? v.regionPrices : null;
+    // Staff shape: rows carry `regionId` (see variantInclude) — expose the full
+    // per-region override list for the edit form. Storefront shape: 0-1 row with NO
+    // `regionId` (region-scoped SELECT) — overlay it onto the displayed price so the
+    // shopper sees this region's price, and never leak the raw rows.
+    const isStaffShape = !!rpRows && rpRows.length > 0 && rpRows[0].regionId !== undefined;
+    let price = decimalToNumber(v.price);
+    let discountedPrice = decimalToNumber(v.discountedPrice);
+    if (!isStaffShape && rpRows && rpRows.length > 0) {
+      const op = decimalToNumber(rpRows[0].price);
+      if (op != null) {
+        price = op;
+        discountedPrice = decimalToNumber(rpRows[0].discountedPrice);
+      }
+    }
+    const out = {
+      id: v.id,
+      optionValue: v.optionValue,
+      optionValue_ar: v.optionValue_ar ?? null,
+      price,
+      discountedPrice,
+      images: Array.isArray(v.images) ? v.images : [],
+      subtitle: v.subtitle ?? null,
+      subtitle_ar: v.subtitle_ar ?? null,
+      isDefault: !!v.isDefault,
+      sortOrder: v.sortOrder,
+      // This variant's own description blocks. Empty = it has none of its own and
+      // shares the product's top-level `descriptions` instead — storefront picks
+      // whichever list is non-empty for the selected variant (variant own > shared).
+      descriptions: orderedDescriptions(v.descriptions),
+      // This variant's own colour choices. Empty = this size offers no colour picker
+      // at all (most products) — see ProductVariantColor.
+      colors: orderedVariantColors(v),
+    };
+    // Staff/edit reads only: this size's per-region price overrides, so the admin
+    // product form can show/edit every region's variant price at once.
+    if (isStaffShape) {
+      out.regionPrices = rpRows.map((r) => ({
+        regionId: r.regionId,
+        price: decimalToNumber(r.price),
+        discountedPrice: decimalToNumber(r.discountedPrice),
+      }));
+    }
+    return out;
+  });
 }
 
 /**
@@ -186,8 +213,18 @@ function variantPriceRange(variants) {
   let min = Infinity;
   let max = -Infinity;
   for (const v of variants) {
-    const price = decimalToNumber(v.price);
-    const discountedPrice = decimalToNumber(v.discountedPrice);
+    let price = decimalToNumber(v.price);
+    let discountedPrice = decimalToNumber(v.discountedPrice);
+    // Storefront region-scoped override (0-1 row, no `regionId` field — see
+    // variantInclude): the "From X" span must reflect this region's variant prices.
+    const rpRows = Array.isArray(v.regionPrices) ? v.regionPrices : null;
+    if (rpRows && rpRows.length > 0 && rpRows[0].regionId === undefined) {
+      const op = decimalToNumber(rpRows[0].price);
+      if (op != null) {
+        price = op;
+        discountedPrice = decimalToNumber(rpRows[0].discountedPrice);
+      }
+    }
     const effective = discountedPrice != null && discountedPrice < price ? discountedPrice : price;
     if (effective < min) min = effective;
     if (effective > max) max = effective;
@@ -210,8 +247,12 @@ function mapProduct(product) {
     variants,
     regions,
     zoneLeadDays,
+    sectionProducts,
     ...rest
   } = product;
+  // Released from the category coming-soon cascade — see regionPriceInclude /
+  // section.service. Presence of a release-scoped SectionProduct row = released.
+  const releasedFromComingSoon = Array.isArray(sectionProducts) && sectionProducts.length > 0;
   const imagesList = orderedImages(product);
   // product.descriptions (the Product -> ProductDescription relation) carries EVERY
   // description row for this product, shared AND variant-scoped alike, since both kinds
@@ -266,11 +307,30 @@ function mapProduct(product) {
         cashArrangementFeeStepAmount: decimalToNumber(r.cashArrangementFeeStepAmount),
         cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
       }));
+      // Which regions this product is a coming-soon teaser in (for the admin edit form).
+      out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
     } else {
       out._regionPriceRow = regions[0]
-        ? { price: decimalToNumber(regions[0].price), discountedPrice: decimalToNumber(regions[0].discountedPrice) }
+        ? {
+            price: decimalToNumber(regions[0].price),
+            discountedPrice: decimalToNumber(regions[0].discountedPrice),
+            comingSoon: !!regions[0].comingSoon,
+          }
         : null;
     }
+  }
+  // Storefront cascade: a product is coming-soon in a region when its category is
+  // coming-soon there. Fold the region-scoped category row into category.comingSoon and
+  // never leak the raw rows. A RELEASED product (curated into a "sell coming-soon"
+  // section) ignores its category's coming-soon entirely — its own comingSoon still applies.
+  if (out.category) {
+    let catComingSoon = out.category.comingSoon;
+    if (Array.isArray(out.category.regions)) {
+      const { regions: catRegions, ...catRest } = out.category;
+      catComingSoon = catRegions[0]?.comingSoon ?? catRest.comingSoon;
+      out.category = catRest;
+    }
+    out.category = { ...out.category, comingSoon: releasedFromComingSoon ? false : catComingSoon };
   }
   // Per-zone prep-lead + cash-arrangement fee overrides (staff/admin reads only, via
   // REGION_INCLUDE) — decimal fields need explicit conversion since they're no longer
@@ -305,15 +365,67 @@ function applyRegionCurrency(mapped) {
     ...clean,
     price: override.price != null ? override.price : clean.price,
     discountedPrice: override.discountedPrice != null ? override.discountedPrice : clean.discountedPrice,
+    // This region's own coming-soon (the category cascade was already folded into
+    // category.comingSoon in mapProduct) — the storefront ORs the two.
+    comingSoon: !!override.comingSoon,
   };
 }
 
-// Storefront (non-staff) include: the requesting region's own price-override row only —
-// no nested region tag, distinguishing it from REGION_INCLUDE in mapProduct above.
+// Storefront (non-staff) include: the requesting region's own price + coming-soon
+// override row only — no nested region tag, distinguishing it from REGION_INCLUDE.
 function regionPriceInclude(regionId) {
+  // "Released from coming-soon": product curated into a PUBLISHED section flagged to sell
+  // coming-soon products — mapProduct then suppresses the category cascade for it. `take:1`
+  // is enough (presence = released). Storefront-only (staff sees the global flag).
+  const released = {
+    sectionProducts: {
+      where: { excluded: false, section: { releaseComingSoon: true, status: 'PUBLISHED' } },
+      take: 1,
+      select: { id: true },
+    },
+  };
   return regionId
-    ? { regions: { where: { regionId }, select: { regionId: true, price: true, discountedPrice: true } } }
-    : {};
+    ? {
+        ...released,
+        regions: { where: { regionId }, select: { regionId: true, price: true, discountedPrice: true, comingSoon: true } },
+      }
+    : released;
+}
+
+/**
+ * Category `select` for a product read. STOREFRONT reads (non-staff, with a region)
+ * additionally pull the region-scoped CategoryRegion.comingSoon so mapProduct can fold
+ * the category cascade into `category.comingSoon` for that region. Staff / no-region
+ * reads keep the plain global fields (the admin edit form uses comingSoonRegionIds, not
+ * the category cascade).
+ */
+function productCategorySelect(visibility = {}) {
+  const base = { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true };
+  if (visibility.isStaff || !visibility.regionId) return base;
+  return { ...base, regions: { where: { regionId: visibility.regionId }, select: { comingSoon: true } } };
+}
+
+/**
+ * Variant include for a product read, scoped to the caller's region context —
+ * mirrors REGION_INCLUDE vs regionPriceInclude at the product level, but for each
+ * variant's per-region price override:
+ *  - staff: EVERY region's override (rows carry `regionId`) so the edit form shows
+ *    all of them at once (orderedVariants exposes them as `variant.regionPrices`).
+ *  - storefront: only the requesting region's row (SELECT omits `regionId`), which
+ *    orderedVariants overlays onto the variant's displayed price and never exposes.
+ *  - no region context: no per-region rows fetched at all.
+ */
+function variantInclude(visibility = {}) {
+  const include = {
+    descriptions: { orderBy: { sortOrder: 'asc' } },
+    colors: { orderBy: { sortOrder: 'asc' } },
+  };
+  if (visibility.isStaff) {
+    include.regionPrices = { select: { regionId: true, price: true, discountedPrice: true } };
+  } else if (visibility.regionId) {
+    include.regionPrices = { where: { regionId: visibility.regionId }, select: { price: true, discountedPrice: true } };
+  }
+  return { orderBy: { sortOrder: 'asc' }, include };
 }
 
 /**
@@ -629,6 +741,44 @@ function normalizeVariantColors(colors) {
   return deduped;
 }
 
+/**
+ * Validate & normalize a single variant's `regionPrices: {regionId, price,
+ * discountedPrice}[]` payload — the per-region override for THAT size. A region
+ * only gets an override row when a `price` is actually provided (blank/null =
+ * "use this variant's base price in that region", no row stored). Dedupes by
+ * regionId and enforces discount <= price. Throws INVALID_PRICE (naming the
+ * region) on a bad value. Mirrors buildRegionPriceMap's rules for the non-variant
+ * per-region price. Region-existence + product-visibility filtering happens in
+ * create/update (against the product's own regionIds).
+ */
+function normalizeVariantRegionPrices(regionPrices, variantLabel) {
+  if (!Array.isArray(regionPrices)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const entry of regionPrices) {
+    if (!entry || typeof entry.regionId !== 'string' || !entry.regionId) continue;
+    if (seen.has(entry.regionId)) continue;
+    const price = entry.price != null && entry.price !== '' ? Number(entry.price) : null;
+    // No base price => no override for this region (falls back to the variant's base price).
+    if (price == null) continue;
+    if (!Number.isFinite(price) || price < 0) {
+      const err = new Error(`Variant "${variantLabel}" has an invalid price for region ${entry.regionId}`);
+      err.code = 'INVALID_PRICE';
+      throw err;
+    }
+    const discountedPrice =
+      entry.discountedPrice != null && entry.discountedPrice !== '' ? Number(entry.discountedPrice) : null;
+    if (discountedPrice != null && (!Number.isFinite(discountedPrice) || discountedPrice < 0 || discountedPrice > price)) {
+      const err = new Error(`Variant "${variantLabel}" discountedPrice cannot exceed price for region ${entry.regionId}`);
+      err.code = 'INVALID_PRICE';
+      throw err;
+    }
+    seen.add(entry.regionId);
+    out.push({ regionId: entry.regionId, price, discountedPrice });
+  }
+  return out;
+}
+
 function normalizeVariants(variants) {
   if (!Array.isArray(variants)) return [];
   const rows = variants
@@ -672,6 +822,9 @@ function normalizeVariants(variants) {
         // independent from any other size's list. Empty = this size offers no
         // colour picker at all.
         colors: normalizeVariantColors(item.colors),
+        // Per-region price overrides for THIS size (empty = same price everywhere).
+        // Filtered to the product's own regionIds in create/update before persisting.
+        regionPrices: normalizeVariantRegionPrices(item.regionPrices, optionValue || optionValue_ar),
       };
     })
     .filter(Boolean);
@@ -753,6 +906,23 @@ function buildRegionPriceMap(regionPrices) {
   return map;
 }
 
+/**
+ * Which of `regionIds` this product is "coming soon" in. Prefers the per-region
+ * `comingSoonRegionIds` (subset of the product's regions); falls back to the legacy
+ * global `comingSoon` boolean (true = coming-soon in ALL its regions). Empty unless
+ * PUBLISHED. Mirrors category.service's resolver — the product's effective coming-soon
+ * in a region is this OR its category's per-region flag.
+ */
+function resolveComingSoonRegionSet(data, regionIds, status) {
+  if (status !== 'PUBLISHED') return new Set();
+  const allowed = new Set(regionIds);
+  if (Array.isArray(data.comingSoonRegionIds)) {
+    return new Set(data.comingSoonRegionIds.filter((id) => allowed.has(id)));
+  }
+  if (data.comingSoon === true) return new Set(regionIds);
+  return new Set();
+}
+
 async function createProduct(data) {
   const categoryId = data.categoryId ? String(data.categoryId).trim() || null : null;
   const status = normalizeStatus(data.status);
@@ -775,6 +945,8 @@ async function createProduct(data) {
   const regionPriceMap = buildRegionPriceMap(data.regionPrices);
   const zoneLeadRows = buildZoneLeadRows(data.zoneLeadDays);
   const regionIds = await resolveWriteRegionIds(data.regionIds);
+  // Which regions this product is a coming-soon teaser in (per-region, default none).
+  const comingSoonSet = resolveComingSoonRegionSet(data, regionIds, status);
   const imageUrls = Array.isArray(data.images)
     ? data.images.filter((u) => typeof u === 'string' && u.trim()).slice(0, MAX_IMAGES)
     : [];
@@ -783,6 +955,13 @@ async function createProduct(data) {
   const quantity = data.quantity != null ? Math.max(0, parseInt(data.quantity, 10) || 0) : 0;
   const productOptionRows = normalizeProductOptions(data.productOptions);
   const variantRows = normalizeVariants(data.variants);
+  // A variant can only carry a price override for a region the product is actually
+  // sold in — drop overrides for regions outside this product's visibility list,
+  // mirroring how buildRegionPriceMap only applies to `regionIds` for ProductRegion.
+  const createRegionIdSet = new Set(regionIds);
+  for (const v of variantRows) {
+    v.regionPrices = (v.regionPrices || []).filter((rp) => createRegionIdSet.has(rp.regionId));
+  }
   // At most one option group drives variants (v1: single-axis) — a second one is
   // defensively cleared here even if the client somehow sent two.
   let variantAxisSeen = false;
@@ -847,9 +1026,10 @@ async function createProduct(data) {
         cashArrangementFeeMarginPercent: cashArrangementFee.feeMarginPercent,
         quantity,
         status,
-        // Only a PUBLISHED product can be "coming soon"; a DRAFT is hidden anyway, so
-        // never persist a confusing DRAFT+comingSoon state.
-        comingSoon: status === 'PUBLISHED' ? !!data.comingSoon : false,
+        // Global mirror = "coming soon in at least one region" (admin list badge +
+        // legacy consumers). Authoritative per-region state is on the ProductRegion rows;
+        // storefront reads resolve the region's own value (OR its category's).
+        comingSoon: comingSoonSet.size > 0,
         ...(regionIds.length > 0
           ? {
               regions: {
@@ -862,6 +1042,7 @@ async function createProduct(data) {
                     deliveryLeadDays: rp?.deliveryLeadDays ?? null,
                     cashArrangementFeeStepAmount: rp?.cashArrangementFeeStepAmount ?? null,
                     cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
+                    comingSoon: comingSoonSet.has(regionId),
                   };
                 }),
               },
@@ -900,9 +1081,10 @@ async function createProduct(data) {
               // don't have that problem (they only need variantId, the IMMEDIATE parent
               // of this very nesting level), so they're safe to create in this same pass.
               variants: {
-                create: variantRows.map(({ descriptions, colors, ...rest }) => ({
+                create: variantRows.map(({ descriptions, colors, regionPrices, ...rest }) => ({
                   ...rest,
                   ...(colors.length > 0 ? { colors: { create: colors } } : {}),
+                  ...(regionPrices.length > 0 ? { regionPrices: { create: regionPrices } } : {}),
                 })),
               },
             }
@@ -931,20 +1113,17 @@ async function createProduct(data) {
       }
     }
 
+    // Staff/admin write-read: category cascade not needed (edit form uses
+    // comingSoonRegionIds), so productCategorySelect returns the plain global fields.
+    const visibility = { isStaff: true };
     return tx.product.findUnique({
       where: { id: product.id },
       include: {
-        category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+        category: { select: productCategorySelect(visibility) },
         images: { orderBy: { sortOrder: 'asc' } },
         descriptions: { orderBy: { sortOrder: 'asc' } },
         productOptions: { orderBy: { sortOrder: 'asc' } },
-        variants: {
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            descriptions: { orderBy: { sortOrder: 'asc' } },
-            colors: { orderBy: { sortOrder: 'asc' } },
-          },
-        },
+        variants: variantInclude({ isStaff: true }),
         ...REGION_INCLUDE,
       },
     });
@@ -1025,7 +1204,11 @@ async function updateProduct(id, data) {
   // prices are fetched here too, as the fallback for any region left out of an incoming
   // `regionPrices` array (e.g. admin only touched Morocco's price — Saudi's must survive
   // the delete+recreate below, not silently null out).
+  // Per-region coming-soon is being (re)set when comingSoonRegionIds (new) or the
+  // legacy global comingSoon boolean is sent.
+  const comingSoonExplicit = data.comingSoonRegionIds !== undefined || data.comingSoon !== undefined;
   let existingRegionPriceByRegionId = new Map();
+  let existingRegionComingSoon = new Map();
   let newRegionIds = null;
   if (data.regionIds !== undefined || data.regionPrices !== undefined) {
     const existingRegionRows = await prisma.productRegion.findMany({
@@ -1037,8 +1220,10 @@ async function updateProduct(id, data) {
         deliveryLeadDays: true,
         cashArrangementFeeStepAmount: true,
         cashArrangementFeeMarginPercent: true,
+        comingSoon: true,
       },
     });
+    existingRegionComingSoon = new Map(existingRegionRows.map((r) => [r.regionId, !!r.comingSoon]));
     existingRegionPriceByRegionId = new Map(
       existingRegionRows.map((r) => [
         r.regionId,
@@ -1126,16 +1311,8 @@ async function updateProduct(id, data) {
     ...(data.quantity !== undefined && { quantity: Math.max(0, parseInt(data.quantity, 10) || 0) }),
     ...(data.categoryId !== undefined && { categoryId: data.categoryId || null }),
     ...(data.status !== undefined && { status: normalizeStatus(data.status, existing.status) }),
-    // comingSoon is meaningful only while PUBLISHED: clamp any sent value to the
-    // effective status, and force it off if this update drafts the product (so a
-    // status-only edit can never leave a stale DRAFT+comingSoon state behind).
-    ...((data.comingSoon !== undefined || data.status !== undefined) && (() => {
-      const effectiveStatus =
-        data.status !== undefined ? normalizeStatus(data.status, existing.status) : existing.status;
-      if (effectiveStatus !== 'PUBLISHED') return { comingSoon: false };
-      if (data.comingSoon !== undefined) return { comingSoon: !!data.comingSoon };
-      return {}; // becoming/staying published without a comingSoon value → leave as-is
-    })()),
+    // Per-region coming-soon (incl. the global `comingSoon` mirror) is reconciled AFTER
+    // the region rows below — see the coming-soon reconcile at the end of the tx.
   };
 
   // All product mutations + counter rebalances run inside one transaction so a partial
@@ -1213,13 +1390,24 @@ async function updateProduct(id, data) {
     }
 
     if (variantRows !== null) {
-      // Deleting a variant cascades (DB-level) to its own description rows, so this
-      // alone clears any prior per-variant overrides too.
+      // Deleting a variant cascades (DB-level) to its own description rows AND its
+      // per-region price overrides, so this alone clears any prior overrides too.
       await tx.productVariant.deleteMany({ where: { productId: id } });
+      // A variant price override is only kept for a region the product is actually
+      // sold in. Effective set = this update's new regionIds when it changed them,
+      // else the product's current regions (unchanged by this update).
+      const variantAllowedRegionIds =
+        newRegionIds !== null
+          ? newRegionIds
+          : (await tx.productRegion.findMany({ where: { productId: id }, select: { regionId: true } })).map(
+              (r) => r.regionId
+            );
+      const variantAllowedRegionIdSet = new Set(variantAllowedRegionIds);
       // One-by-one create (not createMany) because a variant with its own description
       // blocks needs a nested write — createMany can't attach child relations.
       for (const row of variantRows) {
-        const { descriptions, colors, ...rest } = row;
+        const { descriptions, colors, regionPrices, ...rest } = row;
+        const scopedRegionPrices = (regionPrices || []).filter((rp) => variantAllowedRegionIdSet.has(rp.regionId));
         await tx.productVariant.create({
           data: {
             productId: id,
@@ -1233,6 +1421,8 @@ async function updateProduct(id, data) {
             // Colours only need variantId (this create's own immediate relation, not a
             // grandparent), so unlike descriptions they're safe to nest directly here.
             ...(colors.length > 0 ? { colors: { create: colors } } : {}),
+            // Per-region price overrides for this size (variantId is the immediate parent).
+            ...(scopedRegionPrices.length > 0 ? { regionPrices: { create: scopedRegionPrices } } : {}),
           },
         });
       }
@@ -1265,28 +1455,49 @@ async function updateProduct(id, data) {
               deliveryLeadDays: rp?.deliveryLeadDays ?? null,
               cashArrangementFeeStepAmount: rp?.cashArrangementFeeStepAmount ?? null,
               cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
+              // Preserve this region's coming-soon across a rewrite; new region → false.
+              comingSoon: existingRegionComingSoon.get(regionId) ?? false,
             };
           }),
           skipDuplicates: true,
         });
       }
     }
+
+    // Reconcile per-region coming-soon when the admin changed it (comingSoonRegionIds /
+    // legacy comingSoon) or changed status (drafting forces it off). Targeted updateMany
+    // so a coming-soon-only edit doesn't need to rewrite the region rows.
+    if (comingSoonExplicit || data.status !== undefined) {
+      const effectiveStatus = data.status !== undefined ? normalizeStatus(data.status, existing.status) : existing.status;
+      const currentRows = await tx.productRegion.findMany({ where: { productId: id }, select: { regionId: true } });
+      const currentRegionIds = currentRows.map((r) => r.regionId);
+      let comingSoonSet;
+      if (effectiveStatus !== 'PUBLISHED') comingSoonSet = new Set(); // draft clears all
+      else if (comingSoonExplicit) comingSoonSet = resolveComingSoonRegionSet(data, currentRegionIds, effectiveStatus);
+      else comingSoonSet = null; // published + status-only change → preserve
+      if (comingSoonSet !== null) {
+        await tx.productRegion.updateMany({ where: { productId: id }, data: { comingSoon: false } });
+        if (comingSoonSet.size > 0) {
+          await tx.productRegion.updateMany({
+            where: { productId: id, regionId: { in: [...comingSoonSet] } },
+            data: { comingSoon: true },
+          });
+        }
+        await tx.product.update({ where: { id }, data: { comingSoon: comingSoonSet.size > 0 } });
+      }
+    }
   });
 
+  // Staff/admin write-read (see createProduct) — plain global category fields.
+  const visibility = { isStaff: true };
   return prisma.product.findUnique({
     where: { id },
     include: {
-      category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+      category: { select: productCategorySelect(visibility) },
       images: { orderBy: { sortOrder: 'asc' } },
       descriptions: { orderBy: { sortOrder: 'asc' } },
       productOptions: { orderBy: { sortOrder: 'asc' } },
-      variants: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          descriptions: { orderBy: { sortOrder: 'asc' } },
-          colors: { orderBy: { sortOrder: 'asc' } },
-        },
-      },
+      variants: variantInclude({ isStaff: true }),
       ...REGION_INCLUDE,
     },
   });
@@ -1369,17 +1580,11 @@ async function getAllProductsOrdered(page, limit, categoryId, visibility, orderB
       take,
       orderBy,
       include: {
-        category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+        category: { select: productCategorySelect(visibility) },
         images: { orderBy: { sortOrder: 'asc' } },
         descriptions: { orderBy: { sortOrder: 'asc' } },
         productOptions: { orderBy: { sortOrder: 'asc' } },
-        variants: {
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            descriptions: { orderBy: { sortOrder: 'asc' } },
-            colors: { orderBy: { sortOrder: 'asc' } },
-          },
-        },
+        variants: variantInclude(visibility),
         ...(visibility.isStaff ? REGION_INCLUDE : regionPriceInclude(visibility.regionId)),
       },
     }),
@@ -1532,17 +1737,11 @@ async function getBestSellers(page = 1, limit = 10, visibility = {}) {
     const products = await prisma.product.findMany({
       where: { ...where, id: { in: pageIds } },
       include: {
-        category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+        category: { select: productCategorySelect(visibility) },
         images: { orderBy: { sortOrder: 'asc' } },
         descriptions: { orderBy: { sortOrder: 'asc' } },
         productOptions: { orderBy: { sortOrder: 'asc' } },
-        variants: {
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            descriptions: { orderBy: { sortOrder: 'asc' } },
-            colors: { orderBy: { sortOrder: 'asc' } },
-          },
-        },
+        variants: variantInclude(visibility),
         ...(visibility.isStaff ? REGION_INCLUDE : regionPriceInclude(visibility.regionId)),
       },
     });
@@ -1618,17 +1817,11 @@ async function searchProducts(rawQuery, page = 1, limit = 10, visibility = {}, c
       take,
       orderBy: { createdAt: 'desc' },
       include: {
-        category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+        category: { select: productCategorySelect(visibility) },
         images: { orderBy: { sortOrder: 'asc' } },
         descriptions: { orderBy: { sortOrder: 'asc' } },
         productOptions: { orderBy: { sortOrder: 'asc' } },
-        variants: {
-          orderBy: { sortOrder: 'asc' },
-          include: {
-            descriptions: { orderBy: { sortOrder: 'asc' } },
-            colors: { orderBy: { sortOrder: 'asc' } },
-          },
-        },
+        variants: variantInclude(visibility),
         ...(visibility.isStaff ? REGION_INCLUDE : regionPriceInclude(visibility.regionId)),
       },
     }),
@@ -1654,17 +1847,11 @@ async function getProductById(id, visibility = {}, rescueIds = null) {
   const product = await prisma.product.findFirst({
     where: { id, ...buildVisibilityWhere(visibility), ...buildCategoryVisibilityWhere(visibility, rescueIds) },
     include: {
-      category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+      category: { select: productCategorySelect(visibility) },
       images: { orderBy: { sortOrder: 'asc' } },
       descriptions: { orderBy: { sortOrder: 'asc' } },
       productOptions: { orderBy: { sortOrder: 'asc' } },
-      variants: {
-        orderBy: { sortOrder: 'asc' },
-        include: {
-          descriptions: { orderBy: { sortOrder: 'asc' } },
-          colors: { orderBy: { sortOrder: 'asc' } },
-        },
-      },
+      variants: variantInclude(visibility),
       ...(visibility.isStaff ? REGION_INCLUDE : regionPriceInclude(visibility.regionId)),
     },
   });
@@ -1743,18 +1930,38 @@ function resolveVariantPricing(productOptions, variants, selectedOptions) {
 }
 
 /**
+ * This variant's per-region price override for `regionId`, or null when there's no
+ * override (falls back to the variant's base price). Mirrors regionPriceFromRow's
+ * use of the region-scoped ProductRegion row, but for a single ProductVariant. The
+ * variant row must carry `regionPrices` (rows with a `regionId` field — the money
+ * path includes ALL of them and this filters by `regionId`). A row with a null base
+ * price is treated as "no override".
+ */
+function variantRegionOverride(variant, regionId) {
+  if (!regionId || !Array.isArray(variant.regionPrices)) return null;
+  const row = variant.regionPrices.find((r) => r.regionId === regionId);
+  if (!row) return null;
+  const price = decimalToNumber(row.price);
+  if (price == null) return null;
+  return { price, discountedPrice: decimalToNumber(row.discountedPrice) };
+}
+
+/**
  * Effective per-unit price for a product row + the line's chosen options: the matching
  * variant's price (discounted only when lower) when the product has variants, else the
  * existing region-aware product price. `productRow` must carry `productOptions` and
- * `variants` (raw rows) alongside the usual `regions` scoping.
+ * `variants` (raw rows) alongside the usual `regions` scoping. `regionId` (when given)
+ * applies this region's per-variant override — the variant equivalent of the
+ * ProductRegion price override already honored for non-variant products.
  */
-function resolveEffectivePrice(productRow, selectedOptions) {
+function resolveEffectivePrice(productRow, selectedOptions, regionId = null) {
   const variants = Array.isArray(productRow.variants) ? productRow.variants : null;
   if (variants && variants.length > 0) {
     const variant = resolveVariantPricing(productRow.productOptions, variants, selectedOptions);
     if (variant) {
-      const price = decimalToNumber(variant.price);
-      const discountedPrice = decimalToNumber(variant.discountedPrice);
+      const override = variantRegionOverride(variant, regionId);
+      const price = override ? override.price : decimalToNumber(variant.price);
+      const discountedPrice = override ? override.discountedPrice : decimalToNumber(variant.discountedPrice);
       return discountedPrice != null && discountedPrice < price ? discountedPrice : price;
     }
   }

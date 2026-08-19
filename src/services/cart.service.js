@@ -47,8 +47,8 @@ function normalizeCartCash(cashArrangement) {
 // overrides don't apply to a non-default variant in this iteration — see
 // resolveEffectivePrice). `product.regions`/`product.variants`/`product.productOptions`
 // must already be populated the way cartProductInclude below does.
-function effectivePrice(product, selectedOptions) {
-  return productService.resolveEffectivePrice(product, selectedOptions);
+function effectivePrice(product, selectedOptions, regionId = null) {
+  return productService.resolveEffectivePrice(product, selectedOptions, regionId);
 }
 
 // Product include for cart (images + descriptions + productOptions for display)
@@ -61,7 +61,12 @@ const cartProductInclude = {
   images: { orderBy: { sortOrder: 'asc' } },
   descriptions: { orderBy: { sortOrder: 'asc' } },
   productOptions: { orderBy: { sortOrder: 'asc' } },
-  variants: { orderBy: { sortOrder: 'asc' } },
+  // regionPrices (all regions) so resolveEffectivePrice can apply the requesting
+  // region's per-variant override — filtered by regionId inside the resolver.
+  variants: {
+    orderBy: { sortOrder: 'asc' },
+    include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } },
+  },
 };
 
 const suggestionProductInclude = {
@@ -136,15 +141,40 @@ async function addToCart(userId, {
   giftCardSelected = undefined,
   customName = undefined,
   cashArrangement = undefined,
+  regionId = null,
 }) {
   const product = await prisma.product.findUnique({
     where: { id: productId },
-    include: { category: { select: { comingSoon: true, giftCardMode: true } } },
+    include: {
+      category: {
+        select: {
+          comingSoon: true,
+          giftCardMode: true,
+          ...(regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {}),
+        },
+      },
+      // This region's own coming-soon override row (0-1), for the region-aware guard.
+      ...(regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {}),
+      // Released from the category cascade if curated into a published "sell coming-soon" section.
+      sectionProducts: {
+        where: { excluded: false, section: { releaseComingSoon: true, status: 'PUBLISHED' } },
+        take: 1,
+        select: { id: true },
+      },
+    },
   });
   if (!product) return { cart: null, error: 'Product not found' };
-  // Coming-soon items (own flag OR inherited from their category) are visible but
-  // not orderable — block them at add-time so they never reach the cart/checkout.
-  if (product.comingSoon || product.category?.comingSoon) {
+  // Coming-soon items (own flag OR inherited from their category) are visible but not
+  // orderable. Region-aware: use THIS region's per-region flags when a region is known
+  // (a product can be a teaser in one region and live in another); else the global flag.
+  // A RELEASED product (curated into a "sell coming-soon" section) ignores the category
+  // cascade — its own coming-soon still applies.
+  const released = (product.sectionProducts?.length ?? 0) > 0;
+  const productComingSoon = regionId ? Boolean(product.regions?.[0]?.comingSoon) : Boolean(product.comingSoon);
+  const categoryComingSoon = regionId
+    ? Boolean(product.category?.regions?.[0]?.comingSoon)
+    : Boolean(product.category?.comingSoon);
+  if (productComingSoon || (categoryComingSoon && !released)) {
     return { cart: null, error: 'This product is coming soon and cannot be ordered yet' };
   }
 
@@ -397,7 +427,7 @@ async function getCart(userId, currency = 'AED', regionId = null) {
             }
           : null,
       lineTotal:
-        (effectivePrice(productRow, i.selectedOptions) +
+        (effectivePrice(productRow, i.selectedOptions, regionId) +
           productService.optionExtraCharge(productRow, { giftCardSelected: i.giftCardSelected, customName: i.customName })) *
         i.quantity,
     };

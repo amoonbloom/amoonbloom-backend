@@ -67,6 +67,13 @@ model Region {
   // hides the online option — Cash on Delivery still works. Replaces the old global
   // "order currency must equal the gateway currency" gate.
   onlinePaymentEnabled           Boolean  @default(false)
+  // Which online methods are offered when onlinePaymentEnabled is on — set independently
+  // per region from the admin panel. Default true so turning online payment on offers both
+  // (existing enabled regions keep card + Apple Pay). Apple Pay is enforced server-side on
+  // the session endpoints; both drive which options the storefront shows. Both off while
+  // online payment is on = effectively no online method (storefront falls back to COD).
+  applePayEnabled                Boolean  @default(true)
+  cardPaymentEnabled             Boolean  @default(true)
   // ISO 3166-1 alpha-2 code (e.g. "AE", "SA") — renders the region's flag in the
   // storefront's country/region pickers. Null shows a neutral placeholder until
   // an admin sets it (deliberately not required — regions worked without a flag
@@ -156,6 +163,7 @@ model Region {
   blackoutDates         DeliveryBlackoutDate[]
   legalPages            RegionLegalPage[]
   branches              RegionBranch[]
+  variantPrices         ProductVariantRegion[]
 
   @@index([isActive])
   @@index([sortOrder])
@@ -321,6 +329,12 @@ model ProductRegion {
   // utils/cashArrangementMath.js for the full precedence chain.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
+  // Per-region "coming soon" state for this product — visible in this region but
+  // not orderable here. Per-region (not global) so a product can be live in one
+  // region and a teaser in another; default false so a NEW region is available
+  // unless explicitly set. Effective coming-soon in a region = this OR the
+  // product's category's per-region flag (CategoryRegion.comingSoon).
+  comingSoon                      Boolean  @default(false)
   createdAt                       DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -342,6 +356,9 @@ model CategoryRegion {
   // Both fields must be set together or neither.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
+  // Per-region "coming soon" for this category — cascades to its products in this
+  // region only. Default false so a NEW region is available unless explicitly set.
+  comingSoon                      Boolean  @default(false)
   createdAt                       DateTime @default(now())
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -542,6 +559,13 @@ model Section {
   mobileLayout   SectionLayout @default(SCROLL)
   mobileColumns  Int           @default(2)
   mobileLimit    Int           @default(12)
+
+  /// When true, products curated into this section are SOLD even if their category is
+  /// "coming soon" — the section releases them from the category coming-soon cascade so
+  /// they show normally and can be ordered, while the category itself stays a teaser.
+  /// A product's OWN comingSoon still applies. Global (a product in any published section
+  /// with this flag is released everywhere). Default false = no change.
+  releaseComingSoon Boolean @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1001,7 +1025,7 @@ model ProductVariant {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  product      Product               @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product      Product                @relation(fields: [productId], references: [id], onDelete: Cascade)
   // This variant's OWN description blocks (Description tab), when it overrides the
   // shared ones instead of inheriting them — see ProductDescription.variantId.
   descriptions ProductDescription[]
@@ -1009,10 +1033,36 @@ model ProductVariant {
   // Medium only offers Blue/Black. Purely cosmetic (never affects price/stock); see
   // ProductVariantColor for the photo-swap contract.
   colors       ProductVariantColor[]
+  // Per-region price overrides for THIS variant (e.g. the "Large" size costs a
+  // different amount in KSA than UAE). Mirrors ProductRegion.price for the
+  // non-variant case: a row here overrides this variant's base price/discountedPrice
+  // for that region; no row = fall back to this variant's base price. Only the
+  // resolver consults it (cart/order/PDP) — see product.service.resolveEffectivePrice.
+  regionPrices ProductVariantRegion[]
 
   @@unique([productId, optionValue])
   @@index([productId])
   @@index([productId, sortOrder])
+}
+
+/// Per-region manual price override for a single ProductVariant (the variant
+/// equivalent of ProductRegion.price/discountedPrice). One row per (variant,
+/// region). Nullable price columns so a row can carry only a discount override;
+/// a missing row means "use the variant's own base price in this region" (no FX
+/// conversion — the admin types each region's absolute amount, same convention as
+/// the non-variant per-region price). Cascades with both the variant and region.
+model ProductVariantRegion {
+  variantId       String
+  regionId        String
+  price           Decimal? @db.Decimal(10, 2)
+  discountedPrice Decimal? @db.Decimal(10, 2)
+  createdAt       DateTime @default(now())
+
+  variant ProductVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  region  Region         @relation(fields: [regionId], references: [id], onDelete: Cascade)
+
+  @@id([variantId, regionId])
+  @@index([regionId])
 }
 
 /// One colour choice available for ONE specific ProductVariant (e.g. "Pink" for the

@@ -34,7 +34,7 @@ async function handle() {
       paymentInvoiceId: { not: null },
       createdAt: { lte: new Date(now - minAgeMs), gte: new Date(now - maxAgeMs) },
     },
-    select: { id: true, paymentInvoiceId: true },
+    select: { id: true, paymentInvoiceId: true, region: { select: { code: true } } },
     orderBy: { createdAt: 'asc' },
     take: batch,
   });
@@ -45,7 +45,7 @@ async function handle() {
 
   for (const o of orders) {
     try {
-      const res = await orderService.confirmOrderPayment(o.paymentInvoiceId, 'InvoiceId');
+      const res = await orderService.confirmOrderPayment(o.paymentInvoiceId, 'InvoiceId', o.region?.code || null);
       if (res.isPaid) confirmed += 1;
       else stillPending += 1;
     } catch (err) {

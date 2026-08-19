@@ -183,6 +183,10 @@ const createValidation = [
   body('customNameEnabled').optional().isBoolean().withMessage('customNameEnabled must be a boolean'),
   // "Coming soon": visible but not orderable (enforced in cart/order services).
   body('comingSoon').optional().isBoolean().withMessage('comingSoon must be a boolean'),
+  // Per-region coming-soon: which of the product's regions it's a teaser in. Legacy
+  // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
+  body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
+  body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
   body('customNamePrice')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('customNamePrice must be between 0 and 99999999.99').bail()
@@ -269,6 +273,13 @@ const createValidation = [
   body('variants.*.colors.*.images').optional().isArray().withMessage('variants[].colors[].images must be an array of image URLs'),
   body('variants.*.colors.*.images.*').optional().isString().trim().notEmpty().withMessage('Each colour image must be a non-empty URL string'),
   body('variants.*.colors.*.isDefault').optional().isBoolean().withMessage('variants[].colors[].isDefault must be a boolean'),
+  // Per-region price overrides for a variant (size) — the variant equivalent of the
+  // product-level regionPrices. Absolute price per region (no FX). Service enforces
+  // discount <= price and drops overrides for regions the product isn't sold in.
+  body('variants.*.regionPrices').optional().isArray().withMessage('variants[].regionPrices must be an array'),
+  body('variants.*.regionPrices.*.regionId').isString().trim().notEmpty().withMessage('variants[].regionPrices[].regionId is required'),
+  body('variants.*.regionPrices.*.price').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('variants[].regionPrices[].price must be a non-negative number'),
+  body('variants.*.regionPrices.*.discountedPrice').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('variants[].regionPrices[].discountedPrice must be a non-negative number'),
   // Each variant row must have at least one side filled for its label (English OR Arabic).
   body('variants')
     .optional()
@@ -361,6 +372,10 @@ const updateValidation = [
   body('customNameEnabled').optional().isBoolean().withMessage('customNameEnabled must be a boolean'),
   // "Coming soon": visible but not orderable (enforced in cart/order services).
   body('comingSoon').optional().isBoolean().withMessage('comingSoon must be a boolean'),
+  // Per-region coming-soon: which of the product's regions it's a teaser in. Legacy
+  // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
+  body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
+  body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
   body('customNamePrice')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('customNamePrice must be between 0 and 99999999.99').bail()
@@ -450,6 +465,13 @@ const updateValidation = [
   body('variants.*.colors.*.images').optional().isArray().withMessage('variants[].colors[].images must be an array of image URLs'),
   body('variants.*.colors.*.images.*').optional().isString().trim().notEmpty().withMessage('Each colour image must be a non-empty URL string'),
   body('variants.*.colors.*.isDefault').optional().isBoolean().withMessage('variants[].colors[].isDefault must be a boolean'),
+  // Per-region price overrides for a variant (size) — the variant equivalent of the
+  // product-level regionPrices. Absolute price per region (no FX). Service enforces
+  // discount <= price and drops overrides for regions the product isn't sold in.
+  body('variants.*.regionPrices').optional().isArray().withMessage('variants[].regionPrices must be an array'),
+  body('variants.*.regionPrices.*.regionId').isString().trim().notEmpty().withMessage('variants[].regionPrices[].regionId is required'),
+  body('variants.*.regionPrices.*.price').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('variants[].regionPrices[].price must be a non-negative number'),
+  body('variants.*.regionPrices.*.discountedPrice').optional({ nullable: true }).isFloat({ min: 0 }).withMessage('variants[].regionPrices[].discountedPrice must be a non-negative number'),
   // Each variant row must have at least one side filled for its label (English OR Arabic).
   body('variants')
     .optional()

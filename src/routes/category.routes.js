@@ -13,6 +13,10 @@ const regionStatusValidation = [
   body('status').optional().isIn(['DRAFT', 'PUBLISHED']).withMessage('status must be DRAFT or PUBLISHED'),
   // "Coming soon": category (and all its products) visible but not orderable.
   body('comingSoon').optional().isBoolean().withMessage('comingSoon must be a boolean'),
+  // Per-region coming-soon: which of the category's regions it's a teaser in. Legacy
+  // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
+  body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
+  body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
   // Category-default gift-card mode. null/'' clears the default.
   body('giftCardMode').optional({ values: 'null' }).isIn(['MESSAGE', 'NAME']).withMessage('giftCardMode must be MESSAGE or NAME'),
   // How far a DRAFT status reaches: HOME_ONLY (hide from home only, products still list

@@ -21,7 +21,12 @@ const PROMO_PREVIEW_PRODUCT_SELECT = {
   discountedPrice: true,
   categoryId: true,
   productOptions: { orderBy: { sortOrder: 'asc' } },
-  variants: { orderBy: { sortOrder: 'asc' } },
+  // regionPrices (all regions) so a variant-priced line previews against the
+  // requesting region's per-variant override — filtered by regionId in the resolver.
+  variants: {
+    orderBy: { sortOrder: 'asc' },
+    include: { regionPrices: { select: { regionId: true, price: true, discountedPrice: true } } },
+  },
 };
 
 function handlePromoError(err, res, next) {
@@ -201,6 +206,8 @@ async function listAvailablePromoCodes(req, res, next) {
 async function validatePromoCode(req, res, next) {
   try {
     const { code, items: bodyItems } = req.body;
+    // Region for per-variant price overrides (set by the region middleware).
+    const previewRegionId = req.regionId || null;
 
     let items = Array.isArray(bodyItems) ? bodyItems : null;
     if (!items) {
@@ -225,7 +232,7 @@ async function validatePromoCode(req, res, next) {
       items = cart.items.map((ci) => ({
         productId: ci.productId,
         quantity: ci.quantity,
-        price: productService.resolveEffectivePrice(ci.product, ci.selectedOptions),
+        price: productService.resolveEffectivePrice(ci.product, ci.selectedOptions, previewRegionId),
         categoryId: ci.product.categoryId ?? null,
       }));
     } else {
@@ -248,7 +255,7 @@ async function validatePromoCode(req, res, next) {
           // mirrored) price/discountedPrice — see PROMO_PREVIEW_PRODUCT_SELECT.
           const price = it.price != null
             ? Number(it.price)
-            : productService.resolveEffectivePrice(p, it.selectedOptions);
+            : productService.resolveEffectivePrice(p, it.selectedOptions, previewRegionId);
           return {
             productId: it.productId,
             quantity: Number(it.quantity) || 1,
