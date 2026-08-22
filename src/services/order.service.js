@@ -2158,7 +2158,7 @@ async function updateOrderStatus(orderId, status, { allowedRegionIds = null } = 
  * Returns { error } on a guard failure (wrong owner / state / method), otherwise
  * { paymentUrl, invoiceId }.
  */
-async function initiateOrderPayment(orderId, userId) {
+async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, userId },
     select: {
@@ -2194,7 +2194,7 @@ async function initiateOrderPayment(orderId, userId) {
   const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(
     order,
     { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email },
-    { regionCode: order.region?.code || null }
+    { regionCode: order.region?.code || null, returnUrl }
   );
 
   // Store the new invoice id and reset paymentStatus to UNPAID so a retry after a

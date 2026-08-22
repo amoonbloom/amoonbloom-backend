@@ -101,6 +101,15 @@ function appendRegion(url, regionCode) {
   return `${url}${sep}region=${encodeURIComponent(String(regionCode).toLowerCase())}`;
 }
 
+// Web-only: carry the storefront return URL through our callback as `ret`, so the payment
+// return handler can send the browser back to the website's order page after confirming.
+// Mobile passes no returnUrl, so this is a no-op there (the app intercepts the callback).
+function appendReturn(url, returnUrl) {
+  if (!url || !returnUrl) return url;
+  const sep = url.includes('?') ? '&' : '?';
+  return `${url}${sep}ret=${encodeURIComponent(returnUrl)}`;
+}
+
 function gatewayError(message, { retryable = false } = {}) {
   const err = new Error(message);
   err.code = 'PAYMENT_GATEWAY_ERROR';
@@ -198,7 +207,7 @@ async function callMyFatoorah(profile, path, body, { retries = 0 } = {}) {
  *
  * @param {object} opts.regionCode  the order's Region.code — selects the gateway profile.
  */
-async function createPaymentInvoice(order, customer = {}, { regionCode = null } = {}) {
+async function createPaymentInvoice(order, customer = {}, { regionCode = null, returnUrl = null } = {}) {
   const profile = resolveProfile(regionCode);
 
   // MyFatoorah validates CustomerMobile against the account's country, so a number
@@ -215,8 +224,8 @@ async function createPaymentInvoice(order, customer = {}, { regionCode = null } 
     // Charge in the order's own region currency (stamped on Order.currency at checkout).
     // Lets each enabled region charge correctly through its resolved gateway.
     DisplayCurrencyIso: order.currency,
-    CallBackUrl: appendRegion(profile.callbackUrl, regionCode),
-    ErrorUrl: appendRegion(profile.errorUrl || profile.callbackUrl, regionCode),
+    CallBackUrl: appendReturn(appendRegion(profile.callbackUrl, regionCode), returnUrl),
+    ErrorUrl: appendReturn(appendRegion(profile.errorUrl || profile.callbackUrl, regionCode), returnUrl),
     CustomerReference: order.id,
     NotificationOption: 'LNK', // return a link instead of sending SMS/email
     Language: 'en',

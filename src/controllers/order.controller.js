@@ -258,13 +258,41 @@ async function getOrderStatusOnly(req, res, next) {
   }
 }
 
+// Storefront origins we're allowed to redirect the browser to after payment (open-redirect
+// guard). The web checkout passes its own order-page URL; we only honor a return URL whose
+// origin is allowlisted. Set prod origins via STOREFRONT_ALLOWED_ORIGINS (comma-separated);
+// localhost dev origins are always allowed.
+function allowedStorefrontOrigins() {
+  const fromEnv = (process.env.STOREFRONT_ALLOWED_ORIGINS || '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return new Set([...fromEnv, 'http://localhost:3000', 'http://localhost:3001']);
+}
+
+// Returns urlStr if it's an http(s) URL on an allowlisted storefront origin, else null.
+function safeStorefrontUrl(urlStr) {
+  if (!urlStr || typeof urlStr !== 'string') return null;
+  let u;
+  try {
+    u = new URL(urlStr);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+  return allowedStorefrontOrigins().has(u.origin) ? urlStr : null;
+}
+
 // POST /orders/:id/pay — start an online (MyFatoorah) payment for the user's order.
-// Returns the hosted payment URL for the app to open (Apple Pay / cards).
+// Returns the hosted payment URL to open (Apple Pay / cards). The web checkout also sends a
+// `returnUrl` (its order-success page) so, after paying, the browser is sent back to the
+// website instead of a bare backend page. Mobile sends none and keeps its in-app behavior.
 async function initiatePayment(req, res, next) {
   try {
     const { id } = req.params;
     const userId = req.userId;
-    const result = await orderService.initiateOrderPayment(id, userId);
+    const returnUrl = safeStorefrontUrl(req.body?.returnUrl);
+    const result = await orderService.initiateOrderPayment(id, userId, { returnUrl });
     if (result.error) {
       const status = result.error === 'Order not found' ? 404 : 400;
       return error(res, result.error, status);
@@ -350,14 +378,28 @@ async function handlePaymentReturn(req, res) {
   // gateway the invoice was created on. Absent/unknown falls back to the base gateway
   // (correct while regions share one gateway; required once a region gets its own server).
   const regionCode = req.query.region ? String(req.query.region) : null;
+  // Web checkout passes its order-success URL via `ret` (allowlisted). When present we send
+  // the browser back to the website's order page instead of the in-app HTML fallback (mobile
+  // sends no `ret`, so it keeps the HTML page it intercepts).
+  const returnBase = safeStorefrontUrl(req.query.ret);
+  const failUrl = returnBase ? returnBase.replace('/order/success', '/order/error') : null;
+
   if (!paymentId) {
+    if (failUrl) return res.redirect(302, failUrl);
     return res.status(400).type('html').send(paymentResultPage(false, null));
   }
   try {
     const result = await orderService.confirmOrderPayment(paymentId, 'PaymentId', regionCode);
+    if (returnBase) {
+      const target = result.isPaid
+        ? `${returnBase}${returnBase.includes('?') ? '&' : '?'}id=${encodeURIComponent(result.orderId || '')}`
+        : failUrl;
+      return res.redirect(302, target);
+    }
     return res.status(200).type('html').send(paymentResultPage(result.isPaid, result.orderId));
   } catch (err) {
     console.error('[payment] return handler error:', err.message);
+    if (failUrl) return res.redirect(302, failUrl);
     return res.status(200).type('html').send(paymentResultPage(false, null));
   }
 }
