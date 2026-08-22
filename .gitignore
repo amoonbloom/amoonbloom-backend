@@ -1,5 +1,9 @@
 node_modules
-# Keep environment variables out of version control
+# Keep environment variables out of version control (never commit real secrets).
+# .env.example IS tracked as a template (it doesn't match the ".env" line below).
+.env
+.env.local
+.env.*.local
 
 # Prisma
 /generated/prisma
