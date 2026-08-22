@@ -263,11 +263,22 @@ async function getOrderStatusOnly(req, res, next) {
 // origin is allowlisted. Set prod origins via STOREFRONT_ALLOWED_ORIGINS (comma-separated);
 // localhost dev origins are always allowed.
 function allowedStorefrontOrigins() {
-  const fromEnv = (process.env.STOREFRONT_ALLOWED_ORIGINS || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return new Set([...fromEnv, 'http://localhost:3000', 'http://localhost:3001']);
+  const set = new Set(['http://localhost:3000', 'http://localhost:3001']);
+  for (const raw of (process.env.STOREFRONT_ALLOWED_ORIGINS || '').split(',')) {
+    const s = raw.trim();
+    if (s) set.add(s);
+  }
+  // The primary storefront is already configured as FRONTEND_URL — trust its origin too,
+  // so the web payment return works without a separate STOREFRONT_ALLOWED_ORIGINS in the
+  // common single-domain case. (Add STOREFRONT_ALLOWED_ORIGINS for extra origins, e.g. www + apex.)
+  if (process.env.FRONTEND_URL) {
+    try {
+      set.add(new URL(process.env.FRONTEND_URL).origin);
+    } catch {
+      /* ignore a malformed FRONTEND_URL */
+    }
+  }
+  return set;
 }
 
 // Returns urlStr if it's an http(s) URL on an allowlisted storefront origin, else null.
