@@ -1051,24 +1051,13 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       ? 0
       : Math.round(Number(deliveryConfig.deliveryFee ?? 0) * 100) / 100;
 
-    // Shipping VAT (client requirement): the delivery charge is a taxable supply, taxed at the
-    // region's VAT rate whenever VAT is enabled — independent of the product VAT SCOPE
-    // (appliesTo), since shipping isn't a product. Same inclusive/exclusive rule as products:
-    //   • EXCLUSIVE: VAT is ADDED on top of the shipping fee (increases the total).
-    //   • INCLUSIVE: the shipping fee ALREADY contains the VAT (extract it for taxAmount; the
-    //     total is unchanged). Zero when shipping is free or VAT is disabled.
-    const vatRate = vatConfig && vatConfig.enabled ? Number(vatConfig.ratePercent) || 0 : 0;
-    const vatIsInclusive = Boolean(vatConfig && vatConfig.inclusive);
-    let shippingVatAmount = 0;
-    let shippingVatAdds = false;
-    if (vatRate > 0 && shippingAmount > 0) {
-      if (vatIsInclusive) {
-        shippingVatAmount = round2(shippingAmount - shippingAmount / (1 + vatRate / 100));
-      } else {
-        shippingVatAmount = round2(shippingAmount * (vatRate / 100));
-        shippingVatAdds = true;
-      }
-    }
+    // Shipping fee is a FLAT, VAT-INCLUSIVE charge (client requirement, mirrors the live
+    // WooCommerce site): the configured delivery fee is the FINAL amount charged — VAT is
+    // NEVER added on top of it, and no VAT is broken out of it either. The customer-facing VAT
+    // line reflects merchandise (+ cash-arrangement fee) VAT only; the Shipment line is
+    // labelled "(flat rate and VAT inclusive)" on the storefront. This holds for every region
+    // regardless of the product VAT inclusive/exclusive setting, so the delivery fee can never
+    // inflate the order total or the reported tax.
 
     // Raw cash amount is added to the total as-is — it is NEVER passed through VAT and
     // NEVER discounted (unlike the arrangement fee, which is taxed via cashArrangementFeeTotal
@@ -1079,7 +1068,6 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     const finalTotal = round2(
       vat.total +
         shippingAmount +
-        (shippingVatAdds ? shippingVatAmount : 0) +
         cashAmountForTotal +
         cashArrangementFeeTotal
     );
@@ -1118,10 +1106,11 @@ async function createOrderCore(userId, params = {}, opts = {}) {
         totalAmount: finalTotal,
         discountAmount: finalDiscount,
         subtotalAmount: vat.subtotal,
-        // Blended total tax: merchandise VAT + the arrangement fee's own VAT + shipping VAT
-        // (each 0 when not applicable). cashArrangementFeeVatAmount below keeps the fee's
-        // portion separately so a receipt/admin view doesn't have to reverse-engineer it.
-        taxAmount: round2(vat.vatAmount + sumFeeVat + shippingVatAmount),
+        // Blended total tax: merchandise VAT + the arrangement fee's own VAT (each 0 when not
+        // applicable). Shipping is a flat VAT-inclusive charge that contributes NO VAT here.
+        // cashArrangementFeeVatAmount below keeps the fee's portion separately so a
+        // receipt/admin view doesn't have to reverse-engineer it.
+        taxAmount: round2(vat.vatAmount + sumFeeVat),
         // ORDER-LEVEL roll-up of the per-line cash arrangements (the authoritative detail is
         // on each OrderItem). Denomination/note only roll up when exactly one line has cash.
         cashArrangementRequested: anyCashRequested,
@@ -2679,28 +2668,21 @@ async function quoteOrder(userId, input = {}, opts = {}) {
   const vat = vatService.computeOrderVat(vatLines, discount, vatConfig);
   discount = vat.discountAmount;
 
-  // 7) Shipping + shipping VAT + total — MUST stay in sync with the totals block in
-  //    createOrderCore (order.service.js). Cash arrangement excluded (see fn doc).
+  // 7) Shipping (FLAT, VAT-INCLUSIVE) + total — MUST stay in sync with the totals block in
+  //    createOrderCore (order.service.js). The delivery fee is the final amount charged: VAT is
+  //    never added on top and never broken out of it. Cash arrangement excluded (see fn doc).
   const netForDelivery = round2(Math.max(0, Number(vat.subtotal) - Number(discount)));
   const freeDeliveryApplies =
     deliveryConfig.freeDeliveryThreshold != null && netForDelivery >= deliveryConfig.freeDeliveryThreshold;
   const shippingAmount = freeDeliveryApplies ? 0 : round2(Number(deliveryConfig.deliveryFee ?? 0));
 
+  // vatRate/vatIsInclusive are resolved only to REPORT the VAT line's rate/mode to the app —
+  // they do not touch the shipping fee (which stays flat + VAT-inclusive).
   const vatRate = vatConfig && vatConfig.enabled ? Number(vatConfig.ratePercent) || 0 : 0;
   const vatIsInclusive = Boolean(vatConfig && vatConfig.inclusive);
-  let shippingVatAmount = 0;
-  let shippingVatAdds = false;
-  if (vatRate > 0 && shippingAmount > 0) {
-    if (vatIsInclusive) {
-      shippingVatAmount = round2(shippingAmount - shippingAmount / (1 + vatRate / 100));
-    } else {
-      shippingVatAmount = round2(shippingAmount * (vatRate / 100));
-      shippingVatAdds = true;
-    }
-  }
 
-  const taxAmount = round2(vat.vatAmount + shippingVatAmount);
-  const totalAmount = round2(vat.total + shippingAmount + (shippingVatAdds ? shippingVatAmount : 0));
+  const taxAmount = round2(vat.vatAmount);
+  const totalAmount = round2(vat.total + shippingAmount);
 
   return {
     ok: true,

@@ -218,7 +218,14 @@ function renderOrderConfirmation(order) {
           order.vatInclusive ? '' : `+ ${esc(money(taxAmount, currency))}`
         )
       : '',
-    totalsRow('Shipping', shippingAmount > 0 ? esc(money(shippingAmount, currency)) : 'Free'),
+    totalsRow(
+      // Shipping is a flat, VAT-inclusive charge — VAT is never added on top, so the label
+      // says so (matches checkout/receipt). Only annotated when there's a fee and VAT applies.
+      shippingAmount > 0 && order.vatRatePercent != null
+        ? 'Shipping (flat rate and VAT inclusive)'
+        : 'Shipping',
+      shippingAmount > 0 ? esc(money(shippingAmount, currency)) : 'Free'
+    ),
     `<tr><td style="padding:10px 0 0;font-weight:700;font-size:16px;">Total</td><td></td><td style="padding:10px 0 0;text-align:right;font-weight:700;font-size:16px;">${esc(money(order.totalAmount, currency))}</td></tr>`,
   ].join('');
 
