@@ -172,6 +172,36 @@ function buildCategoryZoneLeadRows(zoneLeadDays) {
   return rows;
 }
 
+/**
+ * Next sortOrder for a new category = one past the current max, so new categories
+ * always append to the end of the admin-defined order. Mirrors DeliveryZone.
+ */
+async function nextCategorySortOrder() {
+  const agg = await prisma.category.aggregate({ _max: { sortOrder: true } });
+  return (agg._max.sortOrder ?? -1) + 1;
+}
+
+/**
+ * Persist a drag-reorder of categories. Accepts [{ id, sortOrder }]; ignores any
+ * malformed entry and writes the rest in one transaction. Categories are global
+ * (not region-scoped) so there's no per-region tier to reconcile — the sortOrder
+ * is a single store-wide order that the storefront home grid + menus follow.
+ * Mirrors deliveryZone.service.reorderZones.
+ */
+async function reorderCategories(items) {
+  const clean = (Array.isArray(items) ? items : [])
+    .filter((it) => it && typeof it.id === 'string' && Number.isInteger(it.sortOrder))
+    .map((it) => ({ id: it.id, sortOrder: it.sortOrder }));
+  if (clean.length === 0) return { count: 0 };
+
+  await prisma.$transaction(
+    clean.map((it) =>
+      prisma.category.update({ where: { id: it.id }, data: { sortOrder: it.sortOrder } })
+    )
+  );
+  return { count: clean.length };
+}
+
 async function createCategory(data) {
   const status = normalizeStatus(data.status);
   const draftScope = normalizeDraftScope(data.draftScope);
@@ -192,6 +222,9 @@ async function createCategory(data) {
   const zoneLeadRows = buildCategoryZoneLeadRows(data.zoneLeadDays);
   // Which regions this category is a "coming soon" teaser in (per-region, default none).
   const comingSoonSet = resolveComingSoonRegionSet(data, regionIds, status);
+  // New categories append to the end of the admin-defined order (max + 1), same as
+  // DeliveryZone/BannerImage. Order is then changed only via drag-reorder.
+  const sortOrder = await nextCategorySortOrder();
 
   const draft = {
     title: data.title ?? null,
@@ -210,6 +243,7 @@ async function createCategory(data) {
       description_ar: draft.description_ar ?? null,
       image: data.image ?? null,
       totalProducts: 0,
+      sortOrder,
       status,
       // Global mirror = "coming soon in at least one region" (drives the admin list
       // badge + legacy/global consumers). The authoritative per-region state lives on
@@ -422,7 +456,10 @@ async function deleteCategory(id) {
 async function getAllCategories(visibility = {}) {
   const categories = await prisma.category.findMany({
     where: buildVisibilityWhere(visibility),
-    orderBy: { createdAt: 'desc' },
+    // Admin-defined display order first (drag-reorder), newest-first as the
+    // tiebreak so pre-existing categories (all sortOrder 0) keep their historical
+    // order until an admin reorders. Storefront home grid + menus consume this order.
+    orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
     include: {
       ...(visibility.isStaff ? REGION_INCLUDE : categoryRegionComingSoonInclude(visibility.regionId)),
       _count: { select: { products: true } },
@@ -497,6 +534,7 @@ module.exports = {
   createCategory,
   updateCategory,
   deleteCategory,
+  reorderCategories,
   getAllCategories,
   getCategoryById,
   incrementCategoryProductCount,

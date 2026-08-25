@@ -316,6 +316,27 @@ async function initiatePayment(req, res, next) {
   }
 }
 
+// POST /orders/:id/guest-pay — start online payment for a GUEST order (no logged-in owner).
+// Public: resolves the order by id where userId IS NULL (so it can only ever pay a guest
+// order, never a signed-in user's). The authed /pay route is left untouched (mobile-safe).
+async function initiateGuestPayment(req, res, next) {
+  try {
+    const { id } = req.params;
+    const returnUrl = safeStorefrontUrl(req.body?.returnUrl);
+    // userId = null → initiateOrderPayment matches only guest orders (userId IS NULL).
+    const result = await orderService.initiateOrderPayment(id, null, { returnUrl });
+    if (result.error) {
+      const status = result.error === 'Order not found' ? 404 : 400;
+      return error(res, result.error, status);
+    }
+    return success(res, { paymentUrl: result.paymentUrl, invoiceId: result.invoiceId }, 'Payment created');
+  } catch (err) {
+    if (err.code === 'PAYMENT_NOT_CONFIGURED') return error(res, 'Online payment is not enabled', 503);
+    if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
+    next(err);
+  }
+}
+
 // POST /orders/:id/payment-session — native Apple Pay step 1.
 // Returns a MyFatoorah sessionId for the mobile app to drive the native Apple Pay sheet.
 async function createPaymentSession(req, res, next) {
@@ -488,6 +509,7 @@ module.exports = {
   getOrderStatusOnly,
   updateOrderStatus,
   initiatePayment,
+  initiateGuestPayment,
   createPaymentSession,
   executeApplePay,
   paymentCallback,

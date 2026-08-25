@@ -426,6 +426,30 @@ router.post(
 
 /**
  * @swagger
+ * /orders/{id}/guest-pay:
+ *   post:
+ *     summary: Start online payment for a GUEST order (no login)
+ *     description: |
+ *       Public. Creates a MyFatoorah payment for a guest order (userId IS NULL) that is
+ *       PENDING_PAYMENT / MYFATOORAH, and returns the hosted paymentUrl. Only ever matches
+ *       guest orders — a signed-in user's order can't be paid here. Body may include
+ *       `returnUrl` (the storefront order page to return to; validated against the allowlist).
+ *     tags: [Orders]
+ *     responses:
+ *       200: { description: "Payment created — open paymentUrl" }
+ *       400: { description: Order not payable }
+ *       404: { description: Guest order not found }
+ */
+router.post(
+  '/:id/guest-pay',
+  authLimiter,
+  idParam,
+  handleValidationErrors,
+  orderController.initiateGuestPayment
+);
+
+/**
+ * @swagger
  * /orders/{id}/payment-session:
  *   post:
  *     summary: Create a MyFatoorah session for native Apple Pay (step 1)

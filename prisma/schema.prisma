@@ -820,6 +820,12 @@ model Category {
   description_ar                  String?                 @db.Text
   image                           String?
   totalProducts                   Int                     @default(0)
+  /// Admin-defined display order for the storefront (home page category grid,
+  /// category menus). Lower = earlier. Set only via drag-reorder (PATCH
+  /// /categories/order); new categories append at the end (max + 1). Ties fall
+  /// back to newest-first (createdAt desc), so pre-existing categories keep their
+  /// historical order until an admin reorders them.
+  sortOrder                       Int                     @default(0)
   status                          PublishStatus           @default(DRAFT)
   /// "Coming soon" teaser state, orthogonal to status. A PUBLISHED + comingSoon
   /// category stays fully visible on the storefront but cannot be ordered, and the
@@ -861,6 +867,7 @@ model Category {
 
   @@index([title])
   @@index([status])
+  @@index([sortOrder])
 }
 
 model Product {

@@ -1446,12 +1446,13 @@ async function buyNow(userId, input = {}, opts = {}) {
  * the only differences are userId is null and the contact is snapshotted into
  * guest* fields (so the order can be back-linked to an account later).
  *
- * Payment is always COD for guests: online payment reconciliation
- * (confirmOrderPayment) is scoped to a user, so there is no post-payment account
- * to settle an anonymous online order against.
+ * Payment: COD or MYFATOORAH. Online is confirmed by paymentId → GetPaymentStatus →
+ * CustomerReference (order.id), which is user-agnostic, so a guest online order settles
+ * fine (the receipt goes to the snapshotted guestEmail). The paying step for a guest order
+ * is the public POST /orders/:id/guest-pay (no owner to authenticate against).
  */
 async function createGuestOrder(guestInput = {}, opts = {}) {
-  const { items, orderMessage, shippingAddress, promoCode, email, deliveryType, scheduledDeliveryAt } = guestInput;
+  const { items, orderMessage, shippingAddress, promoCode, email, deliveryType, scheduledDeliveryAt, paymentMethod } = guestInput;
 
   if (!Array.isArray(items) || items.length === 0) {
     return { order: null, error: 'No items to order' };
@@ -1513,7 +1514,9 @@ async function createGuestOrder(guestInput = {}, opts = {}) {
       lineItems,
       orderMessage: orderMessage ?? null,
       shippingAddress,
-      paymentMethod: 'COD',
+      // COD by default; MYFATOORAH allowed for guests too. createOrderCore validates the
+      // value and enforces the region's onlinePaymentEnabled gate.
+      paymentMethod: paymentMethod || 'COD',
       promoCode,
       deliveryType,
       scheduledDeliveryAt,
@@ -2159,6 +2162,7 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
       paymentMethod: true,
       shippingFullName: true,
       shippingPhone: true,
+      guestEmail: true,
       user: { select: { email: true } },
       // region.code selects the gateway profile; cardPaymentEnabled gates the hosted
       // page (which is the card entry point for the /pay flow).
@@ -2182,7 +2186,7 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
 
   const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(
     order,
-    { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email },
+    { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email || order.guestEmail },
     { regionCode: order.region?.code || null, returnUrl }
   );
 

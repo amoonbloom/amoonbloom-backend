@@ -234,6 +234,32 @@ router.delete(
 
 /**
  * @swagger
+ * /categories/order:
+ *   patch:
+ *     summary: Reorder categories (admin/manager)
+ *     description: "Set the store-wide category display order (home page grid + menus) by sending [{ id, sortOrder }]. Order is global, not per-region."
+ *     tags: [Categories]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Category order updated }
+ *       404: { description: One or more categories not found }
+ */
+const reorderValidation = [
+  body('items').isArray({ min: 1 }).withMessage('items must be a non-empty array'),
+  body('items.*.id').isUUID().withMessage('Each item.id must be a valid category ID'),
+  body('items.*.sortOrder').isInt({ min: 0 }).withMessage('Each item.sortOrder must be a non-negative integer'),
+];
+router.patch(
+  '/order',
+  verifyAdminOrManager,
+  requireManagerPermission('CATEGORIES'),
+  reorderValidation,
+  handleValidationErrors,
+  categoryController.reorderCategories
+);
+
+/**
+ * @swagger
  * /categories:
  *   get:
  *     summary: List all categories

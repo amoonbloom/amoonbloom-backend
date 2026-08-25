@@ -51,6 +51,20 @@ async function deleteCategory(req, res, next) {
   }
 }
 
+async function reorderCategories(req, res, next) {
+  try {
+    const items = Array.isArray(req.body.items) ? req.body.items : [];
+    // Category display order is store-wide (drives the storefront home grid + menus),
+    // not per-region, so there's no region tier to scope here — CATEGORIES permission
+    // (checked in the route) gates it. Mirrors the banner reorder.
+    const result = await categoryService.reorderCategories(items);
+    return success(res, null, 'Category order updated successfully', 200, result);
+  } catch (err) {
+    if (err.code === 'P2025') return error(res, 'One or more categories not found', 404);
+    next(err);
+  }
+}
+
 async function getAllCategories(req, res, next) {
   try {
     const visibility = await visibilityFromReq(req);
@@ -79,6 +93,7 @@ module.exports = {
   createCategory,
   updateCategory,
   deleteCategory,
+  reorderCategories,
   getAllCategories,
   getCategoryById,
 };
