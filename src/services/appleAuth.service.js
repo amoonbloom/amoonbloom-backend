@@ -53,14 +53,16 @@ async function getAppleSigningKey(kid) {
  * Verify Apple identity token and return payload.
  * Validates: signature, iss, aud, exp. Returns sub (Apple user id), email (optional), email_verified.
  * @param {string} identityToken - JWT from client (Apple Sign In)
- * @param {string} clientId - Your Apple Services ID or Bundle ID (APPLE_CLIENT_ID)
+ * @param {string|string[]} clientId - Apple Services ID / Bundle ID, or a list of them
+ *   (APPLE_CLIENT_ID). A list lets one backend trust both the native app (Bundle ID)
+ *   and the web (Services ID); the token's `aud` need only match one.
  * @returns {Promise<{ sub: string, email?: string, email_verified?: boolean }>}
  */
 async function verifyAppleToken(identityToken, clientId) {
   if (!identityToken || typeof identityToken !== 'string') {
     throw new Error('Identity token is required');
   }
-  if (!clientId) {
+  if (!clientId || (Array.isArray(clientId) && clientId.length === 0)) {
     throw new Error('Apple client ID is required');
   }
 

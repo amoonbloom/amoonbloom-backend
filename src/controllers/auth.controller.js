@@ -32,6 +32,12 @@ const GOOGLE_AUDIENCE = (process.env.GOOGLE_CLIENT_ID || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+// Apple: native (app Bundle ID) and web (Services ID) use DIFFERENT audiences,
+// so accept a comma-separated list — a token is valid if its `aud` matches any.
+const APPLE_AUDIENCE = (process.env.APPLE_CLIENT_ID || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 
 // Helper: Generate JWT token
 // `tokenVersion` is included as `tv` so a server-side bump (logout-all / password
@@ -388,14 +394,13 @@ const appleLogin = async (req, res, next) => {
       return error(res, 'Identity token is required', 400);
     }
 
-    const clientId = process.env.APPLE_CLIENT_ID;
-    if (!clientId) {
+    if (APPLE_AUDIENCE.length === 0) {
       return error(res, 'Apple Sign In is not configured', 503);
     }
 
     let payload;
     try {
-      payload = await verifyAppleToken(identityToken, clientId);
+      payload = await verifyAppleToken(identityToken, APPLE_AUDIENCE);
     } catch (verifyErr) {
       return error(
         res,
