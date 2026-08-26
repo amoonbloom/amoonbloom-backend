@@ -309,12 +309,15 @@ function mapProduct(product) {
       }));
       // Which regions this product is a coming-soon teaser in (for the admin edit form).
       out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
+      // Which regions this product is on sale in (for the admin edit form).
+      out.onSaleRegionIds = regions.filter((r) => r.onSale).map((r) => r.regionId);
     } else {
       out._regionPriceRow = regions[0]
         ? {
             price: decimalToNumber(regions[0].price),
             discountedPrice: decimalToNumber(regions[0].discountedPrice),
             comingSoon: !!regions[0].comingSoon,
+            onSale: !!regions[0].onSale,
           }
         : null;
     }
@@ -325,12 +328,18 @@ function mapProduct(product) {
   // section) ignores its category's coming-soon entirely — its own comingSoon still applies.
   if (out.category) {
     let catComingSoon = out.category.comingSoon;
+    let catOnSale = out.category.onSale;
     if (Array.isArray(out.category.regions)) {
       const { regions: catRegions, ...catRest } = out.category;
       catComingSoon = catRegions[0]?.comingSoon ?? catRest.comingSoon;
+      catOnSale = catRegions[0]?.onSale ?? catRest.onSale;
       out.category = catRest;
     }
-    out.category = { ...out.category, comingSoon: releasedFromComingSoon ? false : catComingSoon };
+    out.category = {
+      ...out.category,
+      comingSoon: releasedFromComingSoon ? false : catComingSoon,
+      onSale: !!catOnSale,
+    };
   }
   // Per-zone prep-lead + cash-arrangement fee overrides (staff/admin reads only, via
   // REGION_INCLUDE) — decimal fields need explicit conversion since they're no longer
@@ -368,6 +377,9 @@ function applyRegionCurrency(mapped) {
     // This region's own coming-soon (the category cascade was already folded into
     // category.comingSoon in mapProduct) — the storefront ORs the two.
     comingSoon: !!override.comingSoon,
+    // This region's own on-sale flag. attachResolvedSale later ORs in the category
+    // (category.onSale) + section cascades to produce the final effective value.
+    onSale: !!override.onSale,
   };
 }
 
@@ -387,7 +399,7 @@ function regionPriceInclude(regionId) {
   return regionId
     ? {
         ...released,
-        regions: { where: { regionId }, select: { regionId: true, price: true, discountedPrice: true, comingSoon: true } },
+        regions: { where: { regionId }, select: { regionId: true, price: true, discountedPrice: true, comingSoon: true, onSale: true } },
       }
     : released;
 }
@@ -400,9 +412,12 @@ function regionPriceInclude(regionId) {
  * the category cascade).
  */
 function productCategorySelect(visibility = {}) {
-  const base = { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true };
+  const base = {
+    id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true,
+    onSale: true, saleLabel: true, saleLabel_ar: true,
+  };
   if (visibility.isStaff || !visibility.regionId) return base;
-  return { ...base, regions: { where: { regionId: visibility.regionId }, select: { comingSoon: true } } };
+  return { ...base, regions: { where: { regionId: visibility.regionId }, select: { comingSoon: true, onSale: true } } };
 }
 
 /**
@@ -923,6 +938,88 @@ function resolveComingSoonRegionSet(data, regionIds, status) {
   return new Set();
 }
 
+/**
+ * Which of `regionIds` this product is "on sale" in. Prefers the per-region
+ * `onSaleRegionIds` (subset of the product's regions); falls back to the legacy global
+ * `onSale` boolean (true = on sale in ALL its regions). Unlike coming-soon, a sale can
+ * apply while DRAFT is irrelevant here (sale is visual and orthogonal to orderability),
+ * but we still only mark regions the product is actually sold in.
+ */
+function resolveOnSaleRegionSet(data, regionIds) {
+  const allowed = new Set(regionIds);
+  if (Array.isArray(data.onSaleRegionIds)) {
+    return new Set(data.onSaleRegionIds.filter((id) => allowed.has(id)));
+  }
+  if (data.onSale === true) return new Set(regionIds);
+  return new Set();
+}
+
+/** Trim a label to null when blank/absent. */
+function cleanLabel(v) {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+/**
+ * STOREFRONT: finalize each product's effective `onSale` + resolved `saleLabel`/`saleLabel_ar`
+ * for a region. At call time each mapped product already carries its OWN region on-sale flag
+ * (applyRegionCurrency) and its category's region on-sale (folded into category.onSale by
+ * mapProduct). This adds the SECTION cascade — a product curated into any PUBLISHED, on-sale
+ * section visible in the region — then ORs the three and resolves the label
+ * product ?? category ?? section (blank falls through; null = frontend default "Sale").
+ * No-op for staff/no-region reads (they keep the raw per-region fields + onSaleRegionIds).
+ */
+async function attachResolvedSale(mappedProducts, regionId = null) {
+  if (!regionId || !Array.isArray(mappedProducts) || mappedProducts.length === 0) return mappedProducts;
+  const ids = mappedProducts.map((p) => p && p.id).filter(Boolean);
+  if (ids.length === 0) return mappedProducts;
+
+  // One batched query: on-sale-section membership for these products in this region,
+  // lowest section sortOrder first so the first row per product is the label we keep.
+  const rows = await prisma.sectionProduct.findMany({
+    where: {
+      productId: { in: ids },
+      excluded: false,
+      section: {
+        onSale: true,
+        status: 'PUBLISHED',
+        regions: { some: { regionId } },
+      },
+    },
+    select: {
+      productId: true,
+      section: { select: { saleLabel: true, saleLabel_ar: true, sortOrder: true } },
+    },
+    orderBy: { section: { sortOrder: 'asc' } },
+  });
+  const sectionByProduct = new Map();
+  for (const r of rows) {
+    if (!sectionByProduct.has(r.productId)) sectionByProduct.set(r.productId, r.section);
+  }
+
+  for (const p of mappedProducts) {
+    if (!p) continue;
+    const own = !!p.onSale;
+    const cat = !!(p.category && p.category.onSale);
+    const sec = sectionByProduct.get(p.id) || null;
+    p.onSale = own || cat || !!sec;
+    let label = null;
+    let label_ar = null;
+    if (own && cleanLabel(p.saleLabel)) {
+      label = cleanLabel(p.saleLabel);
+      label_ar = cleanLabel(p.saleLabel_ar);
+    } else if (cat && cleanLabel(p.category && p.category.saleLabel)) {
+      label = cleanLabel(p.category.saleLabel);
+      label_ar = cleanLabel(p.category.saleLabel_ar);
+    } else if (sec && cleanLabel(sec.saleLabel)) {
+      label = cleanLabel(sec.saleLabel);
+      label_ar = cleanLabel(sec.saleLabel_ar);
+    }
+    p.saleLabel = label;
+    p.saleLabel_ar = label_ar;
+  }
+  return mappedProducts;
+}
+
 async function createProduct(data) {
   const categoryId = data.categoryId ? String(data.categoryId).trim() || null : null;
   const status = normalizeStatus(data.status);
@@ -947,6 +1044,9 @@ async function createProduct(data) {
   const regionIds = await resolveWriteRegionIds(data.regionIds);
   // Which regions this product is a coming-soon teaser in (per-region, default none).
   const comingSoonSet = resolveComingSoonRegionSet(data, regionIds, status);
+  // Which regions this product is on sale in (per-region, default none). Orthogonal to
+  // status — a sale is a visual badge, not an orderability gate.
+  const onSaleSet = resolveOnSaleRegionSet(data, regionIds);
   const imageUrls = Array.isArray(data.images)
     ? data.images.filter((u) => typeof u === 'string' && u.trim()).slice(0, MAX_IMAGES)
     : [];
@@ -1030,6 +1130,11 @@ async function createProduct(data) {
         // legacy consumers). Authoritative per-region state is on the ProductRegion rows;
         // storefront reads resolve the region's own value (OR its category's).
         comingSoon: comingSoonSet.size > 0,
+        // On-sale global mirror (admin list badge) + custom Sale-badge label (bilingual;
+        // blank falls back to category/section, then the default "Sale" on the storefront).
+        onSale: onSaleSet.size > 0,
+        saleLabel: cleanLabel(data.saleLabel),
+        saleLabel_ar: cleanLabel(data.saleLabel_ar),
         ...(regionIds.length > 0
           ? {
               regions: {
@@ -1043,6 +1148,7 @@ async function createProduct(data) {
                     cashArrangementFeeStepAmount: rp?.cashArrangementFeeStepAmount ?? null,
                     cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
                     comingSoon: comingSoonSet.has(regionId),
+                    onSale: onSaleSet.has(regionId),
                   };
                 }),
               },
@@ -1207,8 +1313,10 @@ async function updateProduct(id, data) {
   // Per-region coming-soon is being (re)set when comingSoonRegionIds (new) or the
   // legacy global comingSoon boolean is sent.
   const comingSoonExplicit = data.comingSoonRegionIds !== undefined || data.comingSoon !== undefined;
+  const onSaleExplicit = data.onSaleRegionIds !== undefined || data.onSale !== undefined;
   let existingRegionPriceByRegionId = new Map();
   let existingRegionComingSoon = new Map();
+  let existingRegionOnSale = new Map();
   let newRegionIds = null;
   if (data.regionIds !== undefined || data.regionPrices !== undefined) {
     const existingRegionRows = await prisma.productRegion.findMany({
@@ -1221,9 +1329,11 @@ async function updateProduct(id, data) {
         cashArrangementFeeStepAmount: true,
         cashArrangementFeeMarginPercent: true,
         comingSoon: true,
+        onSale: true,
       },
     });
     existingRegionComingSoon = new Map(existingRegionRows.map((r) => [r.regionId, !!r.comingSoon]));
+    existingRegionOnSale = new Map(existingRegionRows.map((r) => [r.regionId, !!r.onSale]));
     existingRegionPriceByRegionId = new Map(
       existingRegionRows.map((r) => [
         r.regionId,
@@ -1284,6 +1394,9 @@ async function updateProduct(id, data) {
           ...(data.discountedPrice !== undefined && { discountedPrice: data.discountedPrice }),
         }),
     ...(data.giftCardEnabled !== undefined && { giftCardEnabled: !!data.giftCardEnabled }),
+    // Custom Sale-badge label (bilingual). Omit to leave untouched; blank clears it.
+    ...(data.saleLabel !== undefined && { saleLabel: cleanLabel(data.saleLabel) }),
+    ...(data.saleLabel_ar !== undefined && { saleLabel_ar: cleanLabel(data.saleLabel_ar) }),
     ...(data.giftCardMode !== undefined && { giftCardMode: normalizeGiftCardMode(data.giftCardMode) }),
     ...(data.giftCardExtraPrice !== undefined && {
       giftCardExtraPrice: data.giftCardExtraPrice != null ? Number(data.giftCardExtraPrice) : null,
@@ -1457,6 +1570,8 @@ async function updateProduct(id, data) {
               cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
               // Preserve this region's coming-soon across a rewrite; new region → false.
               comingSoon: existingRegionComingSoon.get(regionId) ?? false,
+              // Preserve this region's on-sale across a rewrite; new region → false.
+              onSale: existingRegionOnSale.get(regionId) ?? false,
             };
           }),
           skipDuplicates: true,
@@ -1485,6 +1600,21 @@ async function updateProduct(id, data) {
         }
         await tx.product.update({ where: { id }, data: { comingSoon: comingSoonSet.size > 0 } });
       }
+    }
+
+    // Reconcile per-region on-sale independently of status (a sale is visual, not an
+    // orderability gate). Same targeted updateMany pattern as coming-soon above.
+    if (onSaleExplicit) {
+      const currentRows = await tx.productRegion.findMany({ where: { productId: id }, select: { regionId: true } });
+      const onSaleSet = resolveOnSaleRegionSet(data, currentRows.map((r) => r.regionId));
+      await tx.productRegion.updateMany({ where: { productId: id }, data: { onSale: false } });
+      if (onSaleSet.size > 0) {
+        await tx.productRegion.updateMany({
+          where: { productId: id, regionId: { in: [...onSaleSet] } },
+          data: { onSale: true },
+        });
+      }
+      await tx.product.update({ where: { id }, data: { onSale: onSaleSet.size > 0 } });
     }
   });
 
@@ -1594,10 +1724,15 @@ async function getAllProductsOrdered(page, limit, categoryId, visibility, orderB
   const mapped = items.map(mapProduct);
   await attachRatingAggregates(mapped);
   await attachResolvedDeliveryLeadDays(mapped, visibility.isStaff ? null : visibility.regionId, visibility.isStaff ? null : visibility.zoneId);
+  // Overlay region currency FIRST (sets each product's own region on-sale flag), THEN
+  // resolve the effective Sale badge (own OR category OR section) — attachResolvedSale
+  // must be the LAST writer of `onSale`/`saleLabel` or applyRegionCurrency clobbers it.
+  const finalItems = visibility.isStaff ? mapped : mapped.map((p) => applyRegionCurrency(p));
+  await attachResolvedSale(finalItems, visibility.isStaff ? null : visibility.regionId);
   return {
     // Storefront-only: overlay the requesting region's currency (AED/SAR) so `price`/
     // `discountedPrice` are already correct for the region. Staff/admin keep raw fields.
-    items: visibility.isStaff ? mapped : mapped.map((p) => applyRegionCurrency(p)),
+    items: finalItems,
     total,
     page: safePage,
     limit: take,
@@ -1750,10 +1885,13 @@ async function getBestSellers(page = 1, limit = 10, visibility = {}) {
     items = products.map(mapProduct);
     await attachRatingAggregates(items);
     await attachResolvedDeliveryLeadDays(items, visibility.isStaff ? null : visibility.regionId, visibility.isStaff ? null : visibility.zoneId);
+    // Region currency first, then resolve sale as the last writer (see the list path).
+    if (!visibility.isStaff) items = items.map((p) => applyRegionCurrency(p));
+    await attachResolvedSale(items, visibility.isStaff ? null : visibility.regionId);
   }
 
   return {
-    items: visibility.isStaff ? items : items.map((p) => applyRegionCurrency(p)),
+    items,
     total,
     page: safePage,
     limit: take,
@@ -1831,10 +1969,11 @@ async function searchProducts(rawQuery, page = 1, limit = 10, visibility = {}, c
   const mappedResults = items.map(mapProduct);
   await attachRatingAggregates(mappedResults);
   await attachResolvedDeliveryLeadDays(mappedResults, visibility.isStaff ? null : visibility.regionId, visibility.isStaff ? null : visibility.zoneId);
+  // Region currency first, then resolve sale as the last writer (see the list path).
+  const finalResults = visibility.isStaff ? mappedResults : mappedResults.map((p) => applyRegionCurrency(p));
+  await attachResolvedSale(finalResults, visibility.isStaff ? null : visibility.regionId);
   return {
-    items: visibility.isStaff
-      ? mappedResults
-      : mappedResults.map((p) => applyRegionCurrency(p)),
+    items: finalResults,
     total,
     page: safePage,
     limit: take,
@@ -1859,7 +1998,10 @@ async function getProductById(id, visibility = {}, rescueIds = null) {
   const mapped = mapProduct(product);
   await attachRatingAggregates([mapped]);
   await attachResolvedDeliveryLeadDays([mapped], visibility.isStaff ? null : visibility.regionId, visibility.isStaff ? null : visibility.zoneId);
-  return visibility.isStaff ? mapped : applyRegionCurrency(mapped);
+  // Region currency first, then resolve sale as the last writer (see the list path).
+  const finalMapped = visibility.isStaff ? mapped : applyRegionCurrency(mapped);
+  await attachResolvedSale([finalMapped], visibility.isStaff ? null : visibility.regionId);
+  return finalMapped;
 }
 
 /**
@@ -2024,4 +2166,5 @@ module.exports = {
   variantPriceRange,
   decimalToNumber,
   attachResolvedDeliveryLeadDays,
+  attachResolvedSale,
 };

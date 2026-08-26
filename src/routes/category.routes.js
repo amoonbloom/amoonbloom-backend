@@ -17,6 +17,12 @@ const regionStatusValidation = [
   // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
   body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
   body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
+  // On sale (visual badge cascaded to the category's products): per-region on/off + label.
+  body('onSale').optional().isBoolean().withMessage('onSale must be a boolean'),
+  body('onSaleRegionIds').optional().isArray().withMessage('onSaleRegionIds must be an array of region ids'),
+  body('onSaleRegionIds.*').optional().isString().trim().notEmpty(),
+  body('saleLabel').optional({ nullable: true }).isString().withMessage('saleLabel must be a string'),
+  body('saleLabel_ar').optional({ nullable: true }).isString().withMessage('saleLabel_ar must be a string'),
   // Category-default gift-card mode. null/'' clears the default.
   body('giftCardMode').optional({ values: 'null' }).isIn(['MESSAGE', 'NAME']).withMessage('giftCardMode must be MESSAGE or NAME'),
   // How far a DRAFT status reaches: HOME_ONLY (hide from home only, products still list

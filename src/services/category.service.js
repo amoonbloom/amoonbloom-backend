@@ -32,7 +32,12 @@ const REGION_INCLUDE = {
 // (no nested `region` tag, so mapCategory takes the storefront overlay branch). Empty
 // object when there's no region context (mapCategory then keeps the global flag).
 function categoryRegionComingSoonInclude(regionId) {
-  return regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {};
+  return regionId ? { regions: { where: { regionId }, select: { comingSoon: true, onSale: true } } } : {};
+}
+
+/** Trim a label to null when blank/absent. */
+function cleanSaleLabel(v) {
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
 }
 
 function normalizeStatus(value, fallback = 'DRAFT') {
@@ -72,6 +77,20 @@ function resolveComingSoonRegionSet(data, regionIds, status) {
   return new Set();
 }
 
+/**
+ * Which of `regionIds` this category is "on sale" in. Prefers per-region `onSaleRegionIds`
+ * (a subset of the category's regions); falls back to the legacy global `onSale` boolean.
+ * Orthogonal to status (a sale is a visual badge, not an orderability gate).
+ */
+function resolveOnSaleRegionSet(data, regionIds) {
+  const allowed = new Set(regionIds);
+  if (Array.isArray(data.onSaleRegionIds)) {
+    return new Set(data.onSaleRegionIds.filter((id) => allowed.has(id)));
+  }
+  if (data.onSale === true) return new Set(regionIds);
+  return new Set();
+}
+
 /** Shape a category row (with regions/_count includes) for API output. */
 function mapCategory(category) {
   if (!category) return null;
@@ -94,9 +113,10 @@ function mapCategory(category) {
   if (Array.isArray(regions)) {
     const hasRegionTags = regions.some((r) => r.region);
     if (!hasRegionTags) {
-      // Storefront: overlay THIS region's coming-soon onto the returned flag, so a
-      // category can be a teaser in one region and live in another.
+      // Storefront: overlay THIS region's coming-soon + on-sale onto the returned flags,
+      // so a category can be a teaser / on sale in one region and not another.
       out.comingSoon = Boolean(regions[0]?.comingSoon);
+      out.onSale = Boolean(regions[0]?.onSale);
       return out;
     }
     const regionList = regions.map((r) => r.region).filter(Boolean);
@@ -104,6 +124,8 @@ function mapCategory(category) {
     out.regionIds = regionList.map((r) => r.id);
     // Which regions this category is a coming-soon teaser in (for the admin edit form).
     out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
+    // Which regions this category is on sale in (for the admin edit form).
+    out.onSaleRegionIds = regions.filter((r) => r.onSale).map((r) => r.regionId);
     // Per-region "ships within N days" + cash-arrangement fee overrides, so the admin
     // edit form can show and edit a different value per region. Additive alongside the tags.
     out.regionLeadDays = regions.map((r) => ({
@@ -222,6 +244,7 @@ async function createCategory(data) {
   const zoneLeadRows = buildCategoryZoneLeadRows(data.zoneLeadDays);
   // Which regions this category is a "coming soon" teaser in (per-region, default none).
   const comingSoonSet = resolveComingSoonRegionSet(data, regionIds, status);
+  const onSaleSet = resolveOnSaleRegionSet(data, regionIds);
   // New categories append to the end of the admin-defined order (max + 1), same as
   // DeliveryZone/BannerImage. Order is then changed only via drag-reorder.
   const sortOrder = await nextCategorySortOrder();
@@ -249,6 +272,11 @@ async function createCategory(data) {
       // badge + legacy/global consumers). The authoritative per-region state lives on
       // the CategoryRegion rows below; storefront reads resolve the region's own value.
       comingSoon: comingSoonSet.size > 0,
+      // On-sale global mirror (admin list badge) + custom Sale-badge label (bilingual;
+      // blank falls back to section, then the default "Sale" on the storefront).
+      onSale: onSaleSet.size > 0,
+      saleLabel: cleanSaleLabel(data.saleLabel),
+      saleLabel_ar: cleanSaleLabel(data.saleLabel_ar),
       giftCardMode: normalizeGiftCardMode(data.giftCardMode),
       draftScope,
       deliveryLeadDays,
@@ -265,6 +293,7 @@ async function createCategory(data) {
                   cashArrangementFeeStepAmount: rl?.cashArrangementFeeStepAmount ?? null,
                   cashArrangementFeeMarginPercent: rl?.cashArrangementFeeMarginPercent ?? null,
                   comingSoon: comingSoonSet.has(regionId),
+                  onSale: onSaleSet.has(regionId),
                 };
               }),
             },
@@ -289,6 +318,7 @@ async function updateCategory(id, data) {
   // Per-region coming-soon is being (re)set when the admin sends comingSoonRegionIds
   // (new) or the legacy global comingSoon boolean.
   const comingSoonExplicit = data.comingSoonRegionIds !== undefined || data.comingSoon !== undefined;
+  const onSaleExplicit = data.onSaleRegionIds !== undefined || data.onSale !== undefined;
 
   const newRegionIds = data.regionIds !== undefined
     ? await regionService.assertValidRegionIds(Array.isArray(data.regionIds) ? data.regionIds : [])
@@ -302,8 +332,9 @@ async function updateCategory(id, data) {
   const wantRegionRewrite = data.regionIds !== undefined || data.regionLeadDays !== undefined;
   let existingCatRegionLead = new Map();
   let existingCatRegionIds = [];
-  // Existing per-region coming-soon, so a regionIds/lead rewrite preserves it.
+  // Existing per-region coming-soon + on-sale, so a regionIds/lead rewrite preserves them.
   let existingCatComingSoon = new Map();
+  let existingCatOnSale = new Map();
   if (wantRegionRewrite) {
     const rows = await prisma.categoryRegion.findMany({
       where: { categoryId: id },
@@ -313,6 +344,7 @@ async function updateCategory(id, data) {
         cashArrangementFeeStepAmount: true,
         cashArrangementFeeMarginPercent: true,
         comingSoon: true,
+        onSale: true,
       },
     });
     existingCatRegionLead = new Map(rows.map((r) => [r.regionId, {
@@ -321,6 +353,7 @@ async function updateCategory(id, data) {
       cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
     }]));
     existingCatComingSoon = new Map(rows.map((r) => [r.regionId, !!r.comingSoon]));
+    existingCatOnSale = new Map(rows.map((r) => [r.regionId, !!r.onSale]));
     existingCatRegionIds = rows.map((r) => r.regionId);
   }
 
@@ -347,6 +380,9 @@ async function updateCategory(id, data) {
         // Category-default gift-card mode. Omit to leave untouched; send null/'' to clear
         // the default (products fall through to MESSAGE).
         ...(data.giftCardMode !== undefined && { giftCardMode: normalizeGiftCardMode(data.giftCardMode) }),
+        // Custom Sale-badge label (bilingual). Omit to leave untouched; blank clears it.
+        ...(data.saleLabel !== undefined && { saleLabel: cleanSaleLabel(data.saleLabel) }),
+        ...(data.saleLabel_ar !== undefined && { saleLabel_ar: cleanSaleLabel(data.saleLabel_ar) }),
         // Optional override; omit to leave untouched, or send null to clear it back to
         // "no override" (falls through to Settings.defaultDeliveryLeadDays).
         ...(data.deliveryLeadDays !== undefined && { deliveryLeadDays: parseDeliveryLeadDays(data.deliveryLeadDays) }),
@@ -387,6 +423,8 @@ async function updateCategory(id, data) {
               // brand-new region defaults to false (available). The explicit coming-soon
               // reconcile below then applies any comingSoonRegionIds change.
               comingSoon: existingCatComingSoon.get(regionId) ?? false,
+              // Preserve this region's on-sale across a rewrite; new region → false.
+              onSale: existingCatOnSale.get(regionId) ?? false,
             };
           }),
           skipDuplicates: true,
@@ -417,6 +455,21 @@ async function updateCategory(id, data) {
         // Keep the global mirror in step with "coming soon in at least one region".
         await tx.category.update({ where: { id }, data: { comingSoon: comingSoonSet.size > 0 } });
       }
+    }
+
+    // Reconcile per-region on-sale independently of status (a sale is visual, not an
+    // orderability gate). Same targeted updateMany pattern as coming-soon above.
+    if (onSaleExplicit) {
+      const currentRows = await tx.categoryRegion.findMany({ where: { categoryId: id }, select: { regionId: true } });
+      const onSaleSet = resolveOnSaleRegionSet(data, currentRows.map((r) => r.regionId));
+      await tx.categoryRegion.updateMany({ where: { categoryId: id }, data: { onSale: false } });
+      if (onSaleSet.size > 0) {
+        await tx.categoryRegion.updateMany({
+          where: { categoryId: id, regionId: { in: [...onSaleSet] } },
+          data: { onSale: true },
+        });
+      }
+      await tx.category.update({ where: { id }, data: { onSale: onSaleSet.size > 0 } });
     }
 
     // Per-zone lead overrides: full replace when the key was sent.
@@ -489,7 +542,7 @@ async function getCategoryById(id, includeProducts = false, visibility = {}) {
             take: 100,
             orderBy: { createdAt: 'desc' },
             include: {
-              category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true } },
+              category: { select: { id: true, title: true, deliveryLeadDays: true, comingSoon: true, giftCardMode: true, onSale: true, saleLabel: true, saleLabel_ar: true } },
               images: { orderBy: { sortOrder: 'asc' } },
               descriptions: { orderBy: { sortOrder: 'asc' } },
               productOptions: { orderBy: { sortOrder: 'asc' } },

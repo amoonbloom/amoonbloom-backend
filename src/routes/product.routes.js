@@ -187,6 +187,12 @@ const createValidation = [
   // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
   body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
   body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
+  // On sale (visual badge): per-region on/off (like coming-soon) + optional bilingual label.
+  body('onSale').optional().isBoolean().withMessage('onSale must be a boolean'),
+  body('onSaleRegionIds').optional().isArray().withMessage('onSaleRegionIds must be an array of region ids'),
+  body('onSaleRegionIds.*').optional().isString().trim().notEmpty(),
+  body('saleLabel').optional({ nullable: true }).isString().withMessage('saleLabel must be a string'),
+  body('saleLabel_ar').optional({ nullable: true }).isString().withMessage('saleLabel_ar must be a string'),
   body('customNamePrice')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('customNamePrice must be between 0 and 99999999.99').bail()
@@ -376,6 +382,12 @@ const updateValidation = [
   // `comingSoon` boolean (above) still works = coming-soon in ALL its regions.
   body('comingSoonRegionIds').optional().isArray().withMessage('comingSoonRegionIds must be an array of region ids'),
   body('comingSoonRegionIds.*').optional().isString().trim().notEmpty(),
+  // On sale (visual badge): per-region on/off (like coming-soon) + optional bilingual label.
+  body('onSale').optional().isBoolean().withMessage('onSale must be a boolean'),
+  body('onSaleRegionIds').optional().isArray().withMessage('onSaleRegionIds must be an array of region ids'),
+  body('onSaleRegionIds.*').optional().isString().trim().notEmpty(),
+  body('saleLabel').optional({ nullable: true }).isString().withMessage('saleLabel must be a string'),
+  body('saleLabel_ar').optional({ nullable: true }).isString().withMessage('saleLabel_ar must be a string'),
   body('customNamePrice')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('customNamePrice must be between 0 and 99999999.99').bail()

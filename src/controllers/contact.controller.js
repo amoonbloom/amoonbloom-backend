@@ -46,6 +46,40 @@ const createUserContact = async (req, res, next) => {
 };
 
 /**
+ * @desc    Public contact form (guest) — no auth. Captures name/phone/email/message.
+ * @route   POST /api/contact/public
+ * @access  Public (rate-limited)
+ */
+const createPublicContact = async (req, res, next) => {
+  try {
+    const name = (req.body?.name ?? '').trim();
+    const phone = (req.body?.phone ?? '').trim();
+    const email = (req.body?.email ?? '').trim();
+    const message = (req.body?.message ?? '').trim();
+
+    if (!name || !phone || !email || !message) {
+      return error(res, 'Name, phone, email and message are required', 400);
+    }
+
+    const contact = await prisma.userContact.create({
+      data: {
+        userId: null,
+        guestName: name,
+        guestPhone: phone,
+        guestEmail: email,
+        // Public form has no subject field — store a readable default for the admin list.
+        subject: `Website enquiry — ${name}`,
+        message,
+      },
+    });
+
+    return success(res, { id: contact.id }, 'Your message has been sent', 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * @desc    Admin lists all user-submitted contacts with user details
  * @route   GET /api/contact/admin/issues
  * @access  Admin / Manager with CONTACT permission
@@ -72,6 +106,9 @@ const getAllUserContacts = async (req, res, next) => {
         { message: { contains: search, mode: 'insensitive' } },
         { user: { fullName: { contains: search, mode: 'insensitive' } } },
         { user: { email: { contains: search, mode: 'insensitive' } } },
+        // Guest (public form) submissions have no linked user.
+        { guestName: { contains: search, mode: 'insensitive' } },
+        { guestEmail: { contains: search, mode: 'insensitive' } },
       ];
     }
 
@@ -115,5 +152,6 @@ const getAllUserContacts = async (req, res, next) => {
 
 module.exports = {
   createUserContact,
+  createPublicContact,
   getAllUserContacts,
 };

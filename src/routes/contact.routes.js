@@ -3,11 +3,13 @@ const { body } = require('express-validator');
 const router = express.Router();
 const {
   createUserContact,
+  createPublicContact,
   getAllUserContacts,
 } = require('../controllers/contact.controller');
 const { verifyToken } = require('../middleware/auth');
 const { verifyAdminOrManager, requireManagerPermission } = require('../middleware/managerAuth');
 const { handleValidationErrors } = require('../middleware/validate');
+const { authStrictLimiter } = require('../middleware/rateLimit');
 
 /**
  * @swagger
@@ -65,6 +67,42 @@ const userContactValidation = [
   body('message').trim().notEmpty().withMessage('Message is required'),
 ];
 router.post('/issue', verifyToken, userContactValidation, handleValidationErrors, createUserContact);
+
+// ============================================
+// PUBLIC CONTACT FORM (guest — no auth)
+// ============================================
+
+/**
+ * @swagger
+ * /contact/public:
+ *   post:
+ *     summary: Submit the public contact form (guest, no login)
+ *     description: Captures name, phone, email and message. Rate-limited per IP.
+ *     tags: [Contact]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone, email, message]
+ *             properties:
+ *               name: { type: string, example: "Sara" }
+ *               phone: { type: string, example: "+966 5x xxx xxxx" }
+ *               email: { type: string, example: "sara@example.com" }
+ *               message: { type: string, example: "I'd like a birthday box for Saturday." }
+ *     responses:
+ *       201: { description: Message sent }
+ *       400: { description: Missing/invalid fields }
+ *       429: { description: Too many requests }
+ */
+const publicContactValidation = [
+  body('name').trim().notEmpty().withMessage('Name is required'),
+  body('phone').trim().notEmpty().withMessage('Phone is required'),
+  body('email').trim().isEmail().withMessage('A valid email is required'),
+  body('message').trim().notEmpty().withMessage('Message is required'),
+];
+router.post('/public', authStrictLimiter, publicContactValidation, handleValidationErrors, createPublicContact);
 
 // ============================================
 // ADMIN ROUTE

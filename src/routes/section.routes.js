@@ -11,6 +11,10 @@ const { resolveRegion } = require('../middleware/region');
 const regionStatusValidation = [
   body('status').optional().isIn(['DRAFT', 'PUBLISHED']).withMessage('status must be DRAFT or PUBLISHED'),
   body('releaseComingSoon').optional().isBoolean().withMessage('releaseComingSoon must be a boolean'),
+  // On sale: cascades a Sale badge to this section's products (visual only) + a label.
+  body('onSale').optional().isBoolean().withMessage('onSale must be a boolean'),
+  body('saleLabel').optional({ nullable: true }).isString().withMessage('saleLabel must be a string'),
+  body('saleLabel_ar').optional({ nullable: true }).isString().withMessage('saleLabel_ar must be a string'),
   body('kind').optional().isIn(['CUSTOM', 'BEST_SELLERS', 'NEW_ARRIVALS']).withMessage('kind must be CUSTOM, BEST_SELLERS, or NEW_ARRIVALS'),
   body('regionIds').optional().isArray().withMessage('regionIds must be an array of region IDs'),
   body('regionIds.*').optional().isUUID().withMessage('Each regionId must be a valid UUID'),

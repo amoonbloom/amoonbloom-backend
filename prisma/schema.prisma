@@ -335,6 +335,11 @@ model ProductRegion {
   // unless explicitly set. Effective coming-soon in a region = this OR the
   // product's category's per-region flag (CategoryRegion.comingSoon).
   comingSoon                      Boolean  @default(false)
+  // Per-region "on sale" flag — shows a Sale badge on this product in this region
+  // only (visual only; does not change price). Per-region so a product can be a
+  // sale item in one region and not another. Effective on-sale in a region = this
+  // OR its category's per-region flag OR any published on-sale section it's in.
+  onSale                          Boolean  @default(false)
   createdAt                       DateTime @default(now())
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
@@ -359,6 +364,9 @@ model CategoryRegion {
   // Per-region "coming soon" for this category — cascades to its products in this
   // region only. Default false so a NEW region is available unless explicitly set.
   comingSoon                      Boolean  @default(false)
+  // Per-region "on sale" for this category — cascades a Sale badge to its products
+  // in this region only (visual only). Default false.
+  onSale                          Boolean  @default(false)
   createdAt                       DateTime @default(now())
 
   category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
@@ -566,6 +574,15 @@ model Section {
   /// A product's OWN comingSoon still applies. Global (a product in any published section
   /// with this flag is released everywhere). Default false = no change.
   releaseComingSoon Boolean @default(false)
+
+  /// "On sale" — cascades a Sale badge to every product curated into this (published)
+  /// section, in the regions the section is visible in (visual only; no price change).
+  /// Default false.
+  onSale     Boolean @default(false)
+  /// Custom Sale-badge text (bilingual) for this section's products. Lowest-priority
+  /// source (product ?? category ?? section ?? "Sale"). Null/blank = default "Sale".
+  saleLabel    String?
+  saleLabel_ar String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -794,14 +811,19 @@ model CashArrangementConfigCategory {
 /// so the admin sees who sent it (name, email, phone) via the join.
 model UserContact {
   id        String   @id @default(uuid())
-  userId    String
+  /// Null for PUBLIC (guest) contact-form submissions; set for authenticated issues.
+  userId    String?
+  /// Guest submitter details, captured from the public contact form (userId null).
+  guestName  String?
+  guestPhone String?
+  guestEmail String?
   subject   String
   message   String   @db.Text
   status    String   @default("NEW")
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([status])
@@ -833,6 +855,14 @@ model Category {
   /// if its own comingSoon OR its category's is set). Not a PublishStatus value on
   /// purpose: keeps visibility queries unchanged and can't break strict-enum clients.
   comingSoon                      Boolean                 @default(false)
+  /// "On sale" — GLOBAL mirror ("on sale in at least one region") for the admin list
+  /// badge; the authoritative per-region state lives on CategoryRegion.onSale. Cascades
+  /// a Sale badge to the category's products (visual only; no price change).
+  onSale                          Boolean                 @default(false)
+  /// Custom Sale-badge text (bilingual) for this category's products. Null/blank falls
+  /// back to the section's, then the default "Sale". A product's own saleLabel wins.
+  saleLabel                       String?
+  saleLabel_ar                    String?
   /// Default gift-card input mode for every product in this category that doesn't set
   /// its own Product.giftCardMode. MESSAGE (personalized note) or NAME (a "gift name").
   /// Null = no category default (products fall through to the MESSAGE default).
@@ -909,6 +939,14 @@ model Product {
   // or ordered — enforced server-side in cart/order services so every client (web +
   // mobile) is blocked. Also inherited when the product's category is comingSoon.
   comingSoon                      Boolean       @default(false)
+  // "On sale" — GLOBAL mirror ("on sale in at least one region") driving the admin
+  // list badge; the authoritative per-region state lives on ProductRegion.onSale.
+  // Visual only (a Sale badge on the storefront); does NOT change price.
+  onSale                          Boolean       @default(false)
+  // Custom Sale-badge text (bilingual). Null/blank falls back to the category's,
+  // then the section's, then the default "Sale" label. Only shown when on sale.
+  saleLabel                       String?
+  saleLabel_ar                    String?
   // Admin-controlled display order (drag-and-drop). Defaults to 0 so existing
   // products keep their createdAt-desc order until an admin reorders them.
   sortOrder                       Int           @default(0)

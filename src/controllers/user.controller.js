@@ -200,6 +200,9 @@ const createUser = async (req, res, next) => {
     if (!email || !trimmedFullName || !password) {
       return error(res, 'Email, full name, and password are required', 400);
     }
+    if (String(password).length < 8) {
+      return error(res, 'Password must be at least 8 characters', 400);
+    }
 
     const resolvedRole = (role && String(role).toUpperCase()) || 'CUSTOMER';
 
@@ -473,6 +476,9 @@ const updateUser = async (req, res, next) => {
     }
 
     if (password) {
+      if (String(password).length < 8) {
+        return error(res, 'Password must be at least 8 characters', 400);
+      }
       updateData.password = await bcrypt.hash(password, 12);
     }
 

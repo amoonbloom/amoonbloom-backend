@@ -92,7 +92,9 @@ function sectionProductInclude(isStaff) {
   return {
     // comingSoon lets the storefront cascade a coming-soon category onto its products
     // shown in a homepage section (a product is coming-soon if its own OR its category's).
-    category: { select: { id: true, title: true, comingSoon: true } },
+    // onSale + saleLabel let attachResolvedSale (run in getSections) fold the category's
+    // sale onto section products so the badge resolves identically to the rest of the store.
+    category: { select: { id: true, title: true, comingSoon: true, onSale: true, saleLabel: true, saleLabel_ar: true } },
     images: { orderBy: { sortOrder: 'asc' } },
     descriptions: { orderBy: { sortOrder: 'asc' } },
     productOptions: { orderBy: { sortOrder: 'asc' } },
@@ -201,6 +203,11 @@ function mapSection(s, visibility = {}) {
     status: s.status,
     // Sell curated products even if their category is coming-soon (see schema).
     releaseComingSoon: !!s.releaseComingSoon,
+    // Cascade a Sale badge to this section's products (visual only). Not staff-gated —
+    // the storefront reads these to render the badge on section products.
+    onSale: !!s.onSale,
+    saleLabel: s.saleLabel ?? null,
+    saleLabel_ar: s.saleLabel_ar ?? null,
     // Not staff-gated (unlike regions/regionIds below) — the storefront needs this
     // to build the right "View all" link for a Best Sellers/New Arrivals rail.
     kind: s.kind ?? 'CUSTOM',
@@ -331,7 +338,15 @@ async function getSections(visibility = {}) {
     include: sectionInclude(visibility),
   });
   await Promise.all(sections.map((s) => augmentDynamicSection(s, visibility)));
-  return sections.map((s) => mapSection(s, visibility));
+  const mappedSections = sections.map((s) => mapSection(s, visibility));
+  // STOREFRONT: resolve each section product's effective Sale badge (own OR category OR
+  // any on-sale section it's in) so the home page renders it identically to the rest of
+  // the store. Mutates the shared product objects in place. Skipped for staff/no-region.
+  if (!visibility.isStaff && visibility.regionId) {
+    const allProducts = mappedSections.flatMap((s) => s.products || []);
+    await productService.attachResolvedSale(allProducts, visibility.regionId);
+  }
+  return mappedSections;
 }
 
 /**
@@ -430,6 +445,11 @@ async function createSection(data) {
       sortOrder: data.sortOrder != null ? Number(data.sortOrder) : maxOrder,
       status,
       releaseComingSoon: data.releaseComingSoon === undefined ? false : !!data.releaseComingSoon,
+      // On-sale: cascades a Sale badge to this section's products (visual only) + a
+      // bilingual custom label (blank = default "Sale" on the storefront).
+      onSale: data.onSale === undefined ? false : !!data.onSale,
+      saleLabel: typeof data.saleLabel === 'string' && data.saleLabel.trim() ? data.saleLabel.trim() : null,
+      saleLabel_ar: typeof data.saleLabel_ar === 'string' && data.saleLabel_ar.trim() ? data.saleLabel_ar.trim() : null,
       kind,
       desktopLayout,
       desktopColumns,
@@ -489,6 +509,11 @@ async function updateSection(id, data) {
   if (data.sortOrder !== undefined) updatePayload.sortOrder = Number(data.sortOrder);
   if (data.status !== undefined) updatePayload.status = normalizeStatus(data.status, existing.status);
   if (data.releaseComingSoon !== undefined) updatePayload.releaseComingSoon = !!data.releaseComingSoon;
+  if (data.onSale !== undefined) updatePayload.onSale = !!data.onSale;
+  if (data.saleLabel !== undefined)
+    updatePayload.saleLabel = typeof data.saleLabel === 'string' && data.saleLabel.trim() ? data.saleLabel.trim() : null;
+  if (data.saleLabel_ar !== undefined)
+    updatePayload.saleLabel_ar = typeof data.saleLabel_ar === 'string' && data.saleLabel_ar.trim() ? data.saleLabel_ar.trim() : null;
   if (data.kind !== undefined) updatePayload.kind = normalizeKind(data.kind, existing.kind);
   if (data.desktopLayout !== undefined) updatePayload.desktopLayout = normalizeLayout(data.desktopLayout, existing.desktopLayout);
   if (data.mobileLayout !== undefined) updatePayload.mobileLayout = normalizeLayout(data.mobileLayout, existing.mobileLayout);
