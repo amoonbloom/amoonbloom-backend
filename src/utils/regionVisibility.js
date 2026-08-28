@@ -90,4 +90,22 @@ function buildCategoryVisibilityWhere({ isStaff }, rescueIds = null) {
   return { NOT: hidden };
 }
 
-module.exports = { buildVisibilityWhere, buildCategoryVisibilityWhere };
+/**
+ * Prisma `_count.select` fragment for counting a category's products the way the
+ * STOREFRONT actually renders them. The raw relation count (`{ products: true }`)
+ * tallies EVERY product — DRAFT and other-region rows included — so a category card
+ * reads e.g. "11" while the shop grid (PUBLISHED + in-region only) shows 4. For
+ * non-staff we therefore filter the count with the SAME visibility predicate the
+ * product listing uses (buildVisibilityWhere), so the sidebar / section count matches
+ * the grid and the "load more" total. Staff keep the true, unfiltered total so the
+ * admin list still shows every product in the category.
+ *
+ * @param {object} visibility - same shape buildVisibilityWhere consumes
+ * @returns {object} Prisma `_count.select` fragment
+ */
+function buildProductCountSelect(visibility = {}) {
+  if (visibility.isStaff) return { products: true };
+  return { products: { where: buildVisibilityWhere(visibility) } };
+}
+
+module.exports = { buildVisibilityWhere, buildCategoryVisibilityWhere, buildProductCountSelect };

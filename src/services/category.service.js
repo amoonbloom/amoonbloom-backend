@@ -2,7 +2,7 @@ const prisma = require('../config/db');
 const { autoTranslate, fillBilingualGapsFromTwin } = require('../utils/bilingual');
 const regionService = require('./region.service');
 const productService = require('./product.service');
-const { buildVisibilityWhere } = require('../utils/regionVisibility');
+const { buildVisibilityWhere, buildProductCountSelect } = require('../utils/regionVisibility');
 const { parseDeliveryLeadDays } = require('../utils/deliveryLeadDays');
 const { parseCashArrangementFeeSchedule } = require('../utils/cashArrangementMath');
 const { normalizeGiftCardMode } = require('../utils/giftCardMode');
@@ -515,7 +515,10 @@ async function getAllCategories(visibility = {}) {
     orderBy: [{ sortOrder: 'asc' }, { createdAt: 'desc' }],
     include: {
       ...(visibility.isStaff ? REGION_INCLUDE : categoryRegionComingSoonInclude(visibility.regionId)),
-      _count: { select: { products: true } },
+      // Storefront count reflects only PUBLISHED + in-region products (not DRAFT /
+      // other-region), so the category-card badge matches the shop grid. Staff get
+      // the true total. See buildProductCountSelect.
+      _count: { select: buildProductCountSelect(visibility) },
     },
   });
   return categories.map(mapCategory);
@@ -530,7 +533,9 @@ async function getCategoryById(id, includeProducts = false, visibility = {}) {
   const isStaff = !!visibility.isStaff;
   const include = {
     ...(visibility.isStaff ? REGION_INCLUDE : categoryRegionComingSoonInclude(visibility.regionId)),
-    _count: { select: { products: true } },
+    // Storefront count reflects only PUBLISHED + in-region products; staff get the
+    // true total. Matches the shop grid / "load more" total. See buildProductCountSelect.
+    _count: { select: buildProductCountSelect(visibility) },
     ...(includeProducts
       ? {
           products: {

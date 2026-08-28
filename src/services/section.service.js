@@ -7,7 +7,7 @@ const prisma = require('../config/db');
 const productService = require('./product.service');
 const regionService = require('./region.service');
 const { autoTranslate } = require('../utils/bilingual');
-const { buildVisibilityWhere } = require('../utils/regionVisibility');
+const { buildVisibilityWhere, buildProductCountSelect } = require('../utils/regionVisibility');
 
 const SECTION_BILINGUAL = [{ src: 'title', dst: 'title_ar' }];
 
@@ -152,7 +152,9 @@ function sectionInclude(visibility = {}) {
       include: {
         category: {
           include: {
-            _count: { select: { products: true } },
+            // Storefront count = PUBLISHED + in-region products only, so a section's
+            // category card matches the shop grid; staff keep the true total.
+            _count: { select: buildProductCountSelect(visibility) },
             ...(isStaff ? SECTION_REGION_INCLUDE : {}),
           },
         },
