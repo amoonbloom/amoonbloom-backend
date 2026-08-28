@@ -43,11 +43,11 @@ const getPublicSettings = async (req, res, next) => {
     // banner unrelated to any specific product).
     let settings = await prisma.settings.findUnique({
       where: { id: 'default' },
-      select: { hiddenPages: true, maintenanceMode: true, allowGuestReviews: true },
+      select: { hiddenPages: true, maintenanceMode: true, allowGuestReviews: true, defaultLocale: true },
     });
 
     if (!settings) {
-      settings = { hiddenPages: [], maintenanceMode: false, allowGuestReviews: true };
+      settings = { hiddenPages: [], maintenanceMode: false, allowGuestReviews: true, defaultLocale: 'en' };
     }
 
     return success(res, settings, 'Public settings fetched successfully');
@@ -70,6 +70,7 @@ const updateSettings = async (req, res, next) => {
       maintenanceMode,
       hiddenPages,
       allowGuestReviews,
+      defaultLocale,
       defaultDeliveryLeadDays,
     } = req.body;
 
@@ -81,6 +82,15 @@ const updateSettings = async (req, res, next) => {
     if (maintenanceMode !== undefined) data.maintenanceMode = maintenanceMode;
     if (hiddenPages !== undefined) data.hiddenPages = hiddenPages;
     if (allowGuestReviews !== undefined) data.allowGuestReviews = Boolean(allowGuestReviews);
+    // Global default storefront language. Only the two supported UI locales are
+    // valid; reject anything else rather than silently storing a junk value the
+    // storefront would then try (and fail) to route to.
+    if (defaultLocale !== undefined) {
+      if (defaultLocale !== 'en' && defaultLocale !== 'ar') {
+        return error(res, 'defaultLocale must be "en" or "ar"', 400);
+      }
+      data.defaultLocale = defaultLocale;
+    }
     // Global fallback prep/booking lead time (whole days). Unlike Category/Product's
     // override (nullable — null means "no override"), this is the end of the resolution
     // chain and must always resolve to a real number, so a null/empty input here is

@@ -670,6 +670,12 @@ model Settings {
   /// signed in or not — can submit a review (guests provide name + email). When
   /// false, only signed-in customers can submit; guest submissions are rejected.
   allowGuestReviews       Boolean  @default(true)
+  /// Global default storefront language ("en" | "ar") applied to a first-time
+  /// visitor who has not explicitly chosen a language. The storefront honours an
+  /// explicit user choice (cookie/localStorage) over this; this only sets the
+  /// site-wide default landing language. The URL (/:region/:locale) stays the
+  /// source of truth — the client redirects a fresh visitor to this locale.
+  defaultLocale           String   @default("en")
   /// Fallback "ships within N day(s)" prep/booking lead time (whole days) used when
   /// neither the product nor its category overrides it. Distinct from
   /// Region.standardDeliveryDays (courier/regional transit time, not prep time) —
