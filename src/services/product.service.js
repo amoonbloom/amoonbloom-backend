@@ -10,6 +10,7 @@ const {
 } = require('../utils/deliveryLeadDays');
 const { parseCashArrangementFeeSchedule } = require('../utils/cashArrangementMath');
 const { normalizeGiftCardMode } = require('../utils/giftCardMode');
+const { sanitizeLegalHtml } = require('../utils/sanitizeLegalHtml');
 
 // Standard include for region join rows on a product read (staff/admin only).
 const REGION_INCLUDE = {
@@ -618,13 +619,33 @@ function optionExtraCharge(productRow, { giftCardSelected, customName } = {}) {
   return extra;
 }
 
+// A body is rich-text HTML (from the admin WYSIWYG editor) when it contains a
+// tag; legacy descriptions authored before the editor are plain text.
+const RICH_HTML_RE = /<\/?[a-z][\s\S]*>/i;
+
+/**
+ * Normalize one description body. Rich-text HTML is sanitized (only the editor's
+ * whitelisted tags/styles survive) and an empty editor's "<p></p>" collapses to
+ * ''. Legacy plain text is left as-is (trimmed) so it is never HTML-encoded and
+ * keeps rendering with preserved line breaks on the storefront.
+ */
+function normalizeDescriptionBody(value) {
+  if (value == null) return '';
+  const str = String(value);
+  if (!str.trim()) return '';
+  if (!RICH_HTML_RE.test(str)) return str.trim();
+  const clean = sanitizeLegalHtml(str);
+  const hasText = clean.replace(/<[^>]*>/g, '').replace(/&nbsp;/gi, ' ').trim() !== '';
+  return hasText ? clean : '';
+}
+
 function normalizeDescriptions(descriptions) {
   if (!Array.isArray(descriptions)) return [];
   return descriptions
     .map((d, i) => {
       if (d == null || typeof d !== 'object') return null;
-      const descEn = d.description != null ? String(d.description).trim() : '';
-      const descAr = d.description_ar != null ? String(d.description_ar).trim() : '';
+      const descEn = normalizeDescriptionBody(d.description);
+      const descAr = normalizeDescriptionBody(d.description_ar);
       // At least one side of description must be filled (validator enforces this too,
       // but double-check here so the service is safe when called from non-HTTP paths).
       if (!descEn && !descAr) return null;

@@ -1,13 +1,14 @@
 /**
- * Sanitizes admin-authored rich-text HTML for the storefront legal pages.
+ * Sanitizes admin-authored rich-text HTML for the storefront (legal pages and
+ * product descriptions — both authored in the same WYSIWYG editor).
  *
- * The legal-page content is authored in an admin WYSIWYG editor and rendered on
- * the storefront via dangerouslySetInnerHTML, so it MUST be sanitized before it
- * is stored (and the frontend sanitizes again on render — defense in depth). We
- * allow only the small set of tags the editor can produce (headings, paragraphs,
- * lists, bold/italic/underline, highlight via <mark>, links, blockquotes, line
- * breaks) and strip everything else — no <script>, <style>, <iframe>, event
- * handlers, or javascript: URLs can survive.
+ * The content is rendered on the storefront via dangerouslySetInnerHTML, so it
+ * MUST be sanitized before it is stored (and the frontend sanitizes again on
+ * render — defense in depth). We allow only the small set of tags the editor can
+ * produce (headings, paragraphs, lists, bold/italic/underline, highlight via
+ * <mark>, links, blockquotes, line breaks) plus the two inline styles it sets
+ * (text-align, font-size), and strip everything else — no <script>, <style>,
+ * <iframe>, event handlers, or javascript: URLs can survive.
  */
 const sanitizeHtml = require('sanitize-html');
 
@@ -21,10 +22,22 @@ const OPTIONS = {
   allowedAttributes: {
     a: ['href', 'target', 'rel'],
     // The editor emits highlight as <mark> and occasionally colored spans — allow
-    // a class hook and the data-color the highlight extension may set. No inline
-    // style (would let url()/expression() through).
+    // a class hook and the data-color the highlight extension may set.
     mark: ['class', 'data-color'],
-    span: ['class'],
+    span: ['class', 'style'],
+    // `style` is allowed on every tag but hard-filtered by `allowedStyles` below
+    // to ONLY text-align / font-size — nothing else (url(), expression(), …) can
+    // survive. Without listing `style` here, allowedStyles never runs.
+    '*': ['style'],
+  },
+  // The editor can set text alignment and font size as inline styles. Allow ONLY
+  // those two properties (with a constrained value grammar) — no url(), position,
+  // or anything else can ride in on the style attribute.
+  allowedStyles: {
+    '*': {
+      'text-align': [/^(left|right|center|justify)$/],
+      'font-size': [/^\d+(?:\.\d+)?(px|em|rem|%)$/],
+    },
   },
   allowedSchemes: ['http', 'https', 'mailto', 'tel'],
   // Force safe link behavior — external links open in a new tab without leaking
