@@ -1306,6 +1306,9 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       orderId: createdOrderId,
       orderNumber: payload.orderNumber,
       totalAmount: payload.totalAmount,
+      // The order's stamped currency (region-aware) so the staff alert shows the
+      // real currency (e.g. SAR), not the AED default in notify.adminNewOrder.
+      currency: payload.currency,
       buyerId: userId ?? null,
       regionId: orderRegionId ?? null,
     });
@@ -1991,6 +1994,7 @@ async function getOrderStatusOnly(orderId) {
       status: true,
       paymentStatus: true,
       totalAmount: true,
+      currency: true,
       createdAt: true,
       updatedAt: true,
     },
@@ -2009,6 +2013,9 @@ async function getOrderStatusOnly(orderId) {
     status: order.status,
     paymentStatus: order.paymentStatus,
     totalAmount: decimalToNumber(order.totalAmount),
+    // Order's stamped currency so the public status/receipt renders SAR (etc.),
+    // not the viewer's browsing-region currency. Legacy orders default to AED.
+    currency: order.currency ?? 'AED',
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
     progress: {
@@ -2359,6 +2366,9 @@ async function finalizePaidOrder(order, { firstPlacement } = {}) {
         orderId,
         orderNumber: order.orderNumber,
         totalAmount: Number(order.totalAmount),
+        // Order's stamped currency (region-aware) — otherwise the staff alert
+        // falls back to AED in notify.adminNewOrder (e.g. a SAR order shows AED).
+        currency: order.currency,
         buyerId: order.userId,
       });
       // Confirmation email: user's account email, or the guest's provided email
