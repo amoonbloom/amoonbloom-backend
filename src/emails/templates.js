@@ -24,14 +24,32 @@ const BLOOM_DARK = '#b32257';
 const BLOOM_TINT = '#fdf2f6';
 
 // FRONTEND_URL should be set per-environment (local: http://localhost:3000; production: the
-// live Vercel deployment) — see .env.example. The fallback below is a safety net only, so a
-// missing env var points at the real production site instead of a dead placeholder domain.
+// live storefront domain, WITH the https:// scheme) — see .env.example. The fallback below
+// is a safety net only, so a missing env var points at the real site rather than nowhere.
+// A value without a scheme produces a link no mail client can open, so one is added here.
 function frontendUrl() {
-  return (process.env.FRONTEND_URL || 'https://amoon-bloom-f.vercel.app').replace(/\/+$/, '');
+  const raw = (process.env.FRONTEND_URL || 'https://www.amoonboutique.com').trim().replace(/\/+$/, '');
+  return /^https?:\/\//i.test(raw) ? raw : `https://${raw}`;
 }
 
-function orderTrackUrl(orderId) {
-  return `${frontendUrl()}/order/status?id=${encodeURIComponent(orderId)}`;
+/**
+ * Absolute "track this order" link.
+ *
+ * Every storefront route lives under `/:regionSlug/:locale/...`. A bare
+ * `/order/status?id=…` leaves the site to guess both: it prepends its build-time
+ * default region, and if that region isn't currently active the layout bounces
+ * the visitor to an active one — dropping the rest of the path AND the `?id=`,
+ * so the customer landed on the homepage with no order. We know the order's
+ * region, and the caller resolves the storefront's default language into
+ * `order.storefrontLocale`, so the email links straight at the final URL with no
+ * redirect in between. Missing either part falls back to the bare path.
+ */
+function orderTrackUrl(order) {
+  const path = `/order/status?id=${encodeURIComponent(order?.id ?? '')}`;
+  const slug = order?.region?.urlSlug || order?.region?.code?.toLowerCase() || null;
+  const locale = order?.storefrontLocale || null;
+  if (!slug || !locale) return `${frontendUrl()}${path}`;
+  return `${frontendUrl()}/${slug}/${locale}${path}`;
 }
 
 function esc(v) {
@@ -283,7 +301,7 @@ function renderOrderConfirmation(order) {
       </tr>
     </table>
     ${deliverySection}
-    ${ctaButton('Track your order', orderTrackUrl(order.id))}`;
+    ${ctaButton('Track your order', orderTrackUrl(order))}`;
 
   return layout('Order confirmation', body, `Order #${order.orderNumber} · ${formatDate(order.createdAt)}`, order.region);
 }
@@ -327,7 +345,7 @@ function renderOrderStatusUpdate(order, status) {
       <p style="margin:0;color:${MUTED};">${esc(meta.line)}</p>
       <p style="margin:18px 0 0;font-size:13px;color:${MUTED};">Order <strong style="color:${INK};">#${esc(order.orderNumber)}</strong> &middot; ${esc(money(order.totalAmount, currency))}</p>
     </div>
-    ${ctaButton('View your order', orderTrackUrl(order.id))}`;
+    ${ctaButton('View your order', orderTrackUrl(order))}`;
 
   return layout(meta.heading, body, `Order #${order.orderNumber}`, order.region);
 }

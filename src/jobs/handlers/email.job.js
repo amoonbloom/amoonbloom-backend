@@ -67,9 +67,32 @@ async function loadOrder(orderId) {
       user: { select: { email: true } },
       // Region-scoped contact/legal info for the email footer — see templates.js's
       // `layout()`. Null fields fall back to the global brand constants there.
-      region: { select: { legalEntity: true, contactEmail: true } },
+      // `urlSlug`/`code` additionally build the track-order link's /:regionSlug
+      // prefix (see templates.js's `orderTrackUrl`).
+      region: {
+        select: { legalEntity: true, contactEmail: true, urlSlug: true, code: true },
+      },
     },
   });
+}
+
+/**
+ * The storefront's default language, for the track-order link. The site
+ * redirects any visitor who hasn't explicitly picked a language to this locale
+ * — and that redirect drops the URL's query string, taking the `?id=` with it.
+ * Linking straight at the default language means the redirect never fires.
+ * Falls back to the schema default if Settings is unreadable.
+ */
+async function storefrontLocale() {
+  try {
+    const settings = await prisma.settings.findUnique({
+      where: { id: 'default' },
+      select: { defaultLocale: true },
+    });
+    return settings?.defaultLocale || 'en';
+  } catch {
+    return 'en';
+  }
 }
 
 async function buildOrderConfirmation(orderId) {
@@ -78,6 +101,7 @@ async function buildOrderConfirmation(orderId) {
   // `order.currency` is the region's currency snapshotted at placement time (multi-currency,
   // added alongside Region.currency) — null only for legacy pre-multi-currency orders.
   order.currency = order.currency || 'AED';
+  order.storefrontLocale = await storefrontLocale();
   // Attach the chosen variant's photo per line so the email thumbnail matches
   // the colour/variant the shopper picked (falls back to the primary image in
   // the template when null).
@@ -99,6 +123,7 @@ async function buildOrderStatus(orderId, status) {
   const to = order.user?.email || order.guestEmail || null;
   if (!to) return null;
   order.currency = order.currency || 'AED';
+  order.storefrontLocale = await storefrontLocale();
   const subjectByStatus = {
     PROCESSING: `Your Amoon Boutique order #${order.orderNumber} is being processed`,
     COMPLETED: `Your Amoon Boutique order #${order.orderNumber} is complete`,
