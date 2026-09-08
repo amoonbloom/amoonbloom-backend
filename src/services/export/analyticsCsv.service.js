@@ -11,7 +11,7 @@ function renderAnalyticsCsv(res, data, filename) {
   const { presetLabel, currency, kpi, orderInsights, category, dailySales, weeklySales, monthlySales, products, inventory, orderStatusCounts } = data;
 
   const sections = [
-    keyValueSection(`Amoonis Boutique — Analytics Export (${presetLabel})`, [
+    keyValueSection(`Amoon Boutique — Analytics Export (${presetLabel})`, [
       ['Generated', new Date().toISOString()],
       ['Currency', currency],
       ['Total Orders (all statuses)', kpi.totals.totalOrdersAllStatuses],

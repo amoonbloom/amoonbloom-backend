@@ -7,11 +7,11 @@
  * partial translation never produces a blank notification.
  */
 
-const BRAND = 'Amoon Bloom';
+const BRAND = 'Amoon Boutique';
 
 const COPY = {
   en: {
-    ORDER_PLACED: { title: 'Order placed', body: 'Thank you! Your Amoon Bloom order was received.' },
+    ORDER_PLACED: { title: 'Order placed', body: 'Thank you! Your Amoon Boutique order was received.' },
     ORDER_PROCESSING: { title: 'Processing your order', body: "We're getting your items ready." },
     ORDER_ON_HOLD: { title: 'Order on hold', body: 'Your order is on hold while we review it.' },
     ORDER_COMPLETED: { title: 'Order complete', body: 'Your order is complete. Enjoy!' },

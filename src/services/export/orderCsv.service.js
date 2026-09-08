@@ -17,7 +17,7 @@ function renderOrdersCsv(res, data, filename) {
   const singleCurrency = summary.currencyBreakdown.length === 1 ? summary.currencyBreakdown[0] : null;
 
   const csv = buildCsv([
-    keyValueSection('Amoonis Boutique — Orders Export', [
+    keyValueSection('Amoon Boutique — Orders Export', [
       ['Generated', new Date().toISOString()],
       ['Date range', `${filtersApplied.dateFrom} to ${filtersApplied.dateTo}`],
       ['Order status', filtersApplied.status],

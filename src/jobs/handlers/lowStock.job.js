@@ -24,7 +24,7 @@ async function handle() {
 
   const html = templates.renderStockReport({ threshold, products });
   const outOfStock = products.filter((p) => p.quantity === 0).length;
-  const subject = `Amoon Bloom — daily stock report (${products.length} low${outOfStock ? `, ${outOfStock} out` : ''})`;
+  const subject = `Amoon Boutique — daily stock report (${products.length} low${outOfStock ? `, ${outOfStock} out` : ''})`;
 
   await Promise.all(
     recipients.map((to) => enqueue(QUEUES.EMAIL_SEND, { to, subject, html }))

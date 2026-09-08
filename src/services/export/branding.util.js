@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const prisma = require('../../config/db');
 
-// The brand logo (mark + "amoonis boutique" wordmark) as an SVG string, bundled
+// The brand logo (mark + "amoon boutique" wordmark) as an SVG string, bundled
 // with the app and read once. Rendered into PDFs via svg-to-pdfkit — this is the
 // reliable branding source since Settings.logo (a CDN URL, often webp) can't be
 // embedded by pdfkit/ExcelJS. Falls back to null if the asset is missing.
@@ -35,7 +35,7 @@ async function getBranding() {
     where: { id: 'default' },
     select: { siteName: true, logo: true },
   });
-  const siteName = settings?.siteName || 'Amoonis Boutique';
+  const siteName = settings?.siteName || 'Amoon Boutique';
 
   let logo = null;
   if (settings?.logo) {

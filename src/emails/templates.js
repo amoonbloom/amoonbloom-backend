@@ -1,5 +1,5 @@
 /**
- * Branded HTML email templates (Amoon Bloom). Pure rendering — no DB, no transport.
+ * Branded HTML email templates (Amoon Boutique). Pure rendering — no DB, no transport.
  * Job handlers load the data and pass plain objects in; email.service.deliver() sends
  * the returned HTML. Keeping rendering here (not inline in handlers) means one place owns
  * the look, and the same layout wraps order confirmations, status updates, and admin reports.
@@ -7,7 +7,7 @@
  * Inline styles only — email clients ignore <style>/external CSS.
  */
 
-const BRAND = 'Amoon Bloom';
+const BRAND = 'Amoon Boutique';
 const LEGAL_ENTITY = 'AMOON BLOOM Trading L.L.C S.O.C™';
 const SUPPORT_EMAIL = 'management@amoonbloom.com';
 // Hosted on the same Bunny CDN used for product/banner images — see

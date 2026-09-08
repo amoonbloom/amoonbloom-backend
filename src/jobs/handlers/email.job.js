@@ -88,7 +88,7 @@ async function buildOrderConfirmation(orderId) {
     );
   }
   return {
-    subject: `Your Amoon Bloom order #${order.orderNumber} is placed`,
+    subject: `Your Amoon Boutique order #${order.orderNumber} is placed`,
     html: templates.renderOrderConfirmation(order),
   };
 }
@@ -100,12 +100,12 @@ async function buildOrderStatus(orderId, status) {
   if (!to) return null;
   order.currency = order.currency || 'AED';
   const subjectByStatus = {
-    PROCESSING: `Your Amoon Bloom order #${order.orderNumber} is being processed`,
-    COMPLETED: `Your Amoon Bloom order #${order.orderNumber} is complete`,
+    PROCESSING: `Your Amoon Boutique order #${order.orderNumber} is being processed`,
+    COMPLETED: `Your Amoon Boutique order #${order.orderNumber} is complete`,
   };
   return {
     to,
-    subject: subjectByStatus[status] || `Your Amoon Bloom order #${order.orderNumber} update`,
+    subject: subjectByStatus[status] || `Your Amoon Boutique order #${order.orderNumber} update`,
     html: templates.renderOrderStatusUpdate(order, status),
   };
 }

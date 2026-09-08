@@ -23,7 +23,7 @@ async function sendReport(report) {
   }
 
   const html = templates.renderSalesReport(report);
-  const subject = `Amoon Bloom — ${report.title} (${report.periodLabel})`;
+  const subject = `Amoon Boutique — ${report.title} (${report.periodLabel})`;
 
   await Promise.all(
     recipients.map((to) => enqueue(QUEUES.EMAIL_SEND, { to, subject, html }))
