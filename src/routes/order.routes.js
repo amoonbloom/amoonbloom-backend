@@ -824,6 +824,47 @@ router.get(
 
 /**
  * @swagger
+ * /orders/{id}/invoice:
+ *   get:
+ *     summary: Download a single order's invoice (admin/manager, ORDERS permission)
+ *     description: |
+ *       Streams ONE order's invoice as a file (`Content-Disposition: attachment`).
+ *       Currently Excel (`.xlsx`) only — the PDF invoice is generated client-side
+ *       from the rendered invoice so Arabic/RTL shapes correctly. `lang` (en|ar)
+ *       selects the invoice language independently of the admin's UI locale. A
+ *       region-scoped manager may only download invoices for orders in their region.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: format
+ *         schema: { type: string, enum: [xlsx], default: xlsx }
+ *       - in: query
+ *         name: lang
+ *         schema: { type: string, enum: [en, ar], default: en }
+ *     responses:
+ *       200: { description: Invoice file stream (xlsx) }
+ *       404: { description: Order not found (or outside the manager's region) }
+ */
+router.get(
+  '/:id/invoice',
+  verifyAdminOrManager,
+  requireManagerPermission('ORDERS'),
+  [
+    param('id').isUUID().withMessage('Valid order ID required'),
+    query('format').optional().isIn(['xlsx']).withMessage('format must be xlsx'),
+    query('lang').optional().isIn(['en', 'ar']).withMessage('lang must be en or ar'),
+  ],
+  handleValidationErrors,
+  orderController.exportOrderInvoice
+);
+
+/**
+ * @swagger
  * /orders/{id}:
  *   get:
  *     summary: Get order by ID
