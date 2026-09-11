@@ -63,4 +63,13 @@ function analyticsFilename(format, range = {}, now = new Date()) {
   return safe(`Analytics_${label}`) + `.${format}`;
 }
 
-module.exports = { ordersFilename, analyticsFilename };
+/**
+ * Single-order invoice filename, e.g. `invoice-1042.xlsx` (or `invoice-550e8400.xlsx`
+ * for a legacy order with no sequential number). Mirrors the frontend's PDF naming.
+ */
+function invoiceFilename(order, format) {
+  const ref = order.orderNumber ?? String(order.id || '').slice(0, 8);
+  return safe(`invoice-${ref}`) + `.${format}`;
+}
+
+module.exports = { ordersFilename, analyticsFilename, invoiceFilename };

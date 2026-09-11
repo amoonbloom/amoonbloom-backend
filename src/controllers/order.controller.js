@@ -5,7 +5,8 @@ const { getOrdersForExport } = require('../services/export/orderExport.service')
 const { renderOrdersExcel } = require('../services/export/orderExcel.service');
 const { renderOrdersPdf } = require('../services/export/orderPdf.service');
 const { renderOrdersCsv } = require('../services/export/orderCsv.service');
-const { ordersFilename } = require('../services/export/filename.util');
+const { ordersFilename, invoiceFilename } = require('../services/export/filename.util');
+const { renderOrderInvoiceExcel } = require('../services/export/orderInvoiceExcel.service');
 const { success, error } = require('../utils/response');
 const { resolveListRegionFilter, isRegionAllowed, allowedRegionIds } = require('../utils/regionScope');
 
@@ -117,6 +118,36 @@ async function exportOrders(req, res, next) {
     } else {
       await renderOrdersPdf(res, result, filename);
     }
+  } catch (err) {
+    next(err);
+  }
+}
+
+// GET /orders/:id/invoice — admin/manager only (ORDERS permission). Streams a
+// SINGLE order's invoice as a file. Currently Excel (xlsx) only; the PDF invoice
+// is produced client-side so Arabic shapes for free. `lang` (en|ar) picks the
+// invoice language independently of the admin's UI locale.
+async function exportOrderInvoice(req, res, next) {
+  try {
+    const { id } = req.params;
+    const format = req.query.format || 'xlsx';
+    const lang = req.query.lang === 'ar' ? 'ar' : 'en';
+
+    // Admin/all-region managers see any order (null filter); the region check
+    // below is what actually scopes a region-limited manager.
+    const order = await orderService.getOrderById(id, null);
+    if (!order) return error(res, 'Order not found', 404);
+    // A region-scoped manager may only export orders within their region(s);
+    // foreign-region orders are hidden as 404 (same rule as getOrderById).
+    if (!isRegionAllowed(req, order.regionId)) {
+      return error(res, 'Order not found', 404);
+    }
+
+    if (format !== 'xlsx') {
+      return error(res, 'Only xlsx invoices are available from this endpoint', 400);
+    }
+    const filename = invoiceFilename(order, 'xlsx');
+    await renderOrderInvoiceExcel(res, order, lang, filename);
   } catch (err) {
     next(err);
   }
@@ -503,6 +534,7 @@ module.exports = {
   quote,
   getOrderById,
   exportOrders,
+  exportOrderInvoice,
   getAllOrdersAdmin,
   getMyOrderHistory,
   getAdminOrderHistory,
