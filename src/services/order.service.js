@@ -1656,6 +1656,10 @@ async function getAllOrdersAdmin(page = 1, limit = 10, status = null, regionId =
     scheduledDeliveryAt: o.scheduledDeliveryAt ?? null,
     estimatedDeliveryDays: o.estimatedDeliveryDays ?? null,
     status: o.status,
+    // Payment method + status so the admin orders list can distinguish a COD
+    // order from a failed online payment at a glance (both sit in PENDING_PAYMENT).
+    paymentMethod: o.paymentMethod ?? 'COD',
+    paymentStatus: o.paymentStatus ?? 'UNPAID',
     region: o.region ? { id: o.region.id, code: o.region.code, name: o.region.name } : null,
     createdAt: o.createdAt,
     updatedAt: o.updatedAt,

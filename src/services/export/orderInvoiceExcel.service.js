@@ -157,13 +157,19 @@ async function renderOrderInvoiceExcel(res, order, lang, filename) {
   const customerName = addr.fullName || order.guestName || '';
   const customerPhone = addr.phone || order.guestPhone || '';
   const customerEmail = order.guestEmail || '';
+  // Area AND zone/province (e.g. "الجوهرة, Dammam") — the zone was previously
+  // dropped by an `area || zone` fallback. Covers zone-based and legacy shapes.
   const addressLine = [
     addr.streetAddress,
     addr.apartment,
-    addr.area || addr.deliveryZoneName,
+    addr.area,
+    addr.deliveryZoneName,
     addr.city,
     addr.state,
+    addr.postalCode,
+    addr.country,
   ]
+    .map((p) => (typeof p === 'string' ? p.trim() : p))
     .filter(Boolean)
     .join(', ');
 
