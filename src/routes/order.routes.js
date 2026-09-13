@@ -19,6 +19,32 @@ const { authLimiter } = require('../middleware/rateLimit');
  */
 
 const idParam = [param('id').isUUID().withMessage('Valid order ID required')];
+
+/**
+ * Saudi National Address SHORT ADDRESS code: 4 letters then 4 digits ("JHRC3674").
+ * A single optional separator is tolerated here ("JHRC 3674" / "JHRC-3674") because the
+ * service normalizes to the canonical uppercase, separator-free form before storing.
+ */
+const SHORT_ADDRESS_PATTERN = /^[A-Za-z]{4}[\s-]?[0-9]{4}$/;
+const SHORT_ADDRESS_MESSAGE =
+  'shortAddress must be 4 letters followed by 4 digits (e.g. JHRC3674)';
+
+// Required on the WEB checkout flows (cart + guest) — the storefront always collects it.
+const shortAddressRequired = body('shortAddress')
+  .trim()
+  .notEmpty()
+  .withMessage('shortAddress is required')
+  .bail()
+  .matches(SHORT_ADDRESS_PATTERN)
+  .withMessage(SHORT_ADDRESS_MESSAGE);
+
+// Format-checked but OPTIONAL on buy-now: that endpoint is used by the mobile app, which
+// predates this field — requiring it here would break existing clients.
+const shortAddressOptional = body('shortAddress')
+  .optional({ nullable: true, checkFalsy: true })
+  .trim()
+  .matches(SHORT_ADDRESS_PATTERN)
+  .withMessage(SHORT_ADDRESS_MESSAGE);
 const statusBody = [
   body('status')
     .isIn(['PENDING_PAYMENT', 'PROCESSING', 'ON_HOLD', 'COMPLETED', 'CANCELLED', 'REFUNDED', 'FAILED', 'DRAFT'])
@@ -161,6 +187,9 @@ const checkoutBody = [
   body('shippingAddress.country').optional().trim(),
   body('shippingAddress.area').optional().trim(),
   body('shippingAddress.deliveryZoneId').optional({ checkFalsy: true }).isUUID().withMessage('deliveryZoneId must be a valid id'),
+  // Order-level (NOT nested in shippingAddress) so it is captured the same way whether
+  // the customer picked a saved address or typed a new one.
+  shortAddressRequired,
   // Cash arrangement for a CART checkout is per-line and stored ON the cart (set at
   // add-to-cart time) — it is NOT accepted in the checkout body. See cart.routes.js.
 ];
@@ -306,6 +335,7 @@ const guestCheckoutBody = [
   body('shippingAddress.country').optional({ nullable: true }).trim(),
   body('shippingAddress.area').trim().notEmpty().withMessage('Area is required'),
   body('shippingAddress.deliveryZoneId').optional({ checkFalsy: true }).isUUID().withMessage('deliveryZoneId must be a valid id'),
+  shortAddressRequired,
 ];
 
 router.post(
@@ -369,6 +399,7 @@ const buyNowBody = [
   body('cashArrangement.cashAmount').optional({ nullable: true }).isFloat({ gt: 0 }).withMessage('cashArrangement.cashAmount must be a positive number'),
   body('cashArrangement.denomination').optional({ nullable: true }).isInt({ gt: 0 }).withMessage('cashArrangement.denomination must be a positive whole number'),
   body('cashArrangement.note').optional({ nullable: true }).trim().isLength({ max: 500 }).withMessage('cashArrangement.note must be 500 characters or fewer'),
+  shortAddressOptional,
 ];
 router.post(
   '/buy-now',

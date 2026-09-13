@@ -36,6 +36,7 @@ const T = {
     phone: 'Phone',
     email: 'Email',
     address: 'Address',
+    shortAddress: 'Short Address',
     item: 'Item',
     variant: 'Variant',
     unitPrice: 'Unit Price',
@@ -65,6 +66,7 @@ const T = {
     phone: 'الهاتف',
     email: 'البريد الإلكتروني',
     address: 'العنوان',
+    shortAddress: 'العنوان المختصر',
     item: 'المنتج',
     variant: 'الخيار',
     unitPrice: 'سعر الوحدة',
@@ -257,6 +259,8 @@ async function renderOrderInvoiceExcel(res, order, lang, filename) {
   if (customerPhone) kv(L.phone, customerPhone);
   if (customerEmail) kv(L.email, customerEmail);
   if (addressLine) kv(L.address, addressLine);
+  // Saudi National Address short code — absent on orders placed before the field existed.
+  if (addr.shortAddress) kv(L.shortAddress, addr.shortAddress);
   spacer();
 
   // --- Items (the one section that earns a full styled table header) ---

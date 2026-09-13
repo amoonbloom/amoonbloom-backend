@@ -1333,6 +1333,11 @@ model Order {
   shippingCountry             String?
   /// Area/neighborhood free text, snapshot from the address used at checkout.
   shippingArea                String?
+  /// Saudi National Address SHORT ADDRESS code — 4 letters + 4 digits (e.g. "JHRC3674"),
+  /// the code printed on the building's address plate. Collected as a required field at
+  /// checkout and stored uppercased. Nullable because orders placed BEFORE this field
+  /// existed have none — never assume it is present on a historical order.
+  shippingShortAddress        String?
   /// Delivery zone (e.g. emirate) NAME snapshot — not an FK, so renaming/deleting
   /// the zone later never alters historical orders (same reasoning as vatRatePercent).
   shippingZoneName            String?
