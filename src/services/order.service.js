@@ -188,6 +188,9 @@ function toOrderResponsePayload(order) {
             postalCode: order.shippingPostalCode ?? null,
             country: order.shippingCountry ?? null,
             area: order.shippingArea ?? null,
+            // Saudi National Address short code ("JHRC3674"). Null on orders placed
+            // before this field existed — surfaces must tolerate its absence.
+            shortAddress: order.shippingShortAddress ?? null,
             deliveryZoneName: order.shippingZoneName ?? null,
           }
         : null,
@@ -277,6 +280,31 @@ function trimOrNullStr(v) {
 }
 
 /**
+ * Saudi National Address SHORT ADDRESS code: exactly 4 letters followed by 4 digits
+ * (e.g. "JHRC3674" — the code on the building's address plate).
+ *
+ * Canonical storage form is UPPERCASE with no separators. Accepts the shapes a human
+ * realistically types/pastes — lowercase, inner spaces, or a dash ("jhrc 3674",
+ * "JHRC-3674") — and normalizes them; anything else is rejected. Returns null for an
+ * absent value so callers can decide whether it is required (the web checkout requires
+ * it; the mobile buy-now path stays backward compatible).
+ *
+ * @returns {{ value: string|null, error: string|null }}
+ */
+const SHORT_ADDRESS_RE = /^[A-Z]{4}[0-9]{4}$/;
+function normalizeShortAddress(v) {
+  if (v == null || String(v).trim() === '') return { value: null, error: null };
+  const cleaned = String(v).toUpperCase().replace(/[\s-]/g, '');
+  if (!SHORT_ADDRESS_RE.test(cleaned)) {
+    return {
+      value: null,
+      error: 'shortAddress must be 4 letters followed by 4 digits (e.g. JHRC3674)',
+    };
+  }
+  return { value: cleaned, error: null };
+}
+
+/**
  * Shared order-creation core used by BOTH cart checkout and "Buy Now". It takes a
  * normalized list of line items so the pricing / promo / region / address / stock /
  * transaction logic lives in exactly one place (no drift between the two flows).
@@ -296,6 +324,11 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     orderMessage = null,
     addressId,
     shippingAddress,
+    // Saudi National Address short code (4 letters + 4 digits). ORDER-LEVEL, not part of
+    // the address payload, so it is captured identically whether the customer picked a
+    // SAVED address or typed a new one — a saved address predating this field would
+    // otherwise leave the order without a code.
+    shortAddress = null,
     paymentMethod = 'COD',
     promoCode,
     clearCart = true,
@@ -437,6 +470,13 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       order: null,
       error: 'Online payment isn’t available for this region yet — please choose Cash on Delivery.',
     };
+  }
+
+  // Short address is validated up-front (before any stock/promo work) so a malformed
+  // code fails fast with a clear message rather than mid-transaction.
+  const shortAddressResult = normalizeShortAddress(shortAddress);
+  if (shortAddressResult.error) {
+    return { order: null, error: shortAddressResult.error };
   }
 
   // Resolve the shipping address: a saved addressId or an inline shippingAddress.
@@ -1140,6 +1180,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
         shippingPostalCode: resolvedAddress.postalCode,
         shippingCountry: resolvedAddress.country,
         shippingArea: resolvedAddress.area,
+        shippingShortAddress: shortAddressResult.value,
         shippingZoneName,
         regionId: orderRegionId,
         currency: orderCurrency,
@@ -1330,6 +1371,7 @@ async function createOrder(userId, checkoutInput = {}, opts = {}) {
   const {
     addressId,
     shippingAddress,
+    shortAddress,
     paymentMethod = 'COD',
     promoCode,
     deliveryType,
@@ -1360,6 +1402,7 @@ async function createOrder(userId, checkoutInput = {}, opts = {}) {
       orderMessage: cartData.orderMessage ?? null,
       addressId,
       shippingAddress,
+      shortAddress,
       paymentMethod,
       promoCode,
       deliveryType,
@@ -1383,6 +1426,7 @@ async function buyNow(userId, input = {}, opts = {}) {
     quantity = 1,
     addressId,
     shippingAddress,
+    shortAddress,
     paymentMethod = 'COD',
     promoCode,
     deliveryType,
@@ -1430,6 +1474,7 @@ async function buyNow(userId, input = {}, opts = {}) {
       orderMessage: null,
       addressId,
       shippingAddress,
+      shortAddress,
       paymentMethod,
       promoCode,
       deliveryType,
@@ -1455,7 +1500,7 @@ async function buyNow(userId, input = {}, opts = {}) {
  * is the public POST /orders/:id/guest-pay (no owner to authenticate against).
  */
 async function createGuestOrder(guestInput = {}, opts = {}) {
-  const { items, orderMessage, shippingAddress, promoCode, email, deliveryType, scheduledDeliveryAt, paymentMethod } = guestInput;
+  const { items, orderMessage, shippingAddress, shortAddress, promoCode, email, deliveryType, scheduledDeliveryAt, paymentMethod } = guestInput;
 
   if (!Array.isArray(items) || items.length === 0) {
     return { order: null, error: 'No items to order' };
@@ -1517,6 +1562,7 @@ async function createGuestOrder(guestInput = {}, opts = {}) {
       lineItems,
       orderMessage: orderMessage ?? null,
       shippingAddress,
+      shortAddress,
       // COD by default; MYFATOORAH allowed for guests too. createOrderCore validates the
       // value and enforces the region's onlinePaymentEnabled gate.
       paymentMethod: paymentMethod || 'COD',
