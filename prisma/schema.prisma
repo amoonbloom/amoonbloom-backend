@@ -336,6 +336,10 @@ model ProductRegion {
   // utils/cashArrangementMath.js for the full precedence chain.
   cashArrangementFeeStepAmount    Decimal? @db.Decimal(10, 2)
   cashArrangementFeeMarginPercent Decimal? @db.Decimal(5, 2)
+  // Per-region gift-card / custom-name add-on prices. Null = use the product's
+  // global Product.giftCardExtraPrice / Product.customNamePrice for this region.
+  giftCardExtraPrice              Decimal? @db.Decimal(10, 2)
+  customNamePrice                 Decimal? @db.Decimal(10, 2)
   // Per-region "coming soon" state for this product — visible in this region but
   // not orderable here. Per-region (not global) so a product can be live in one
   // region and a teaser in another; default false so a NEW region is available

@@ -387,7 +387,13 @@ async function getCart(userId, currency = 'AED', regionId = null) {
   const overrides = regionId && productIds.length > 0
     ? await prisma.productRegion.findMany({
         where: { productId: { in: productIds }, regionId },
-        select: { productId: true, price: true, discountedPrice: true },
+        select: {
+          productId: true,
+          price: true,
+          discountedPrice: true,
+          giftCardExtraPrice: true,
+          customNamePrice: true,
+        },
       })
     : [];
   const overrideByProductId = new Map(overrides.map((r) => [r.productId, r]));

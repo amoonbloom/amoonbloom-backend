@@ -319,6 +319,8 @@ function mapProduct(product) {
         deliveryLeadDays: r.deliveryLeadDays ?? null,
         cashArrangementFeeStepAmount: decimalToNumber(r.cashArrangementFeeStepAmount),
         cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
+        giftCardExtraPrice: decimalToNumber(r.giftCardExtraPrice),
+        customNamePrice: decimalToNumber(r.customNamePrice),
       }));
       // Which regions this product is a coming-soon teaser in (for the admin edit form).
       out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
@@ -329,6 +331,8 @@ function mapProduct(product) {
         ? {
             price: decimalToNumber(regions[0].price),
             discountedPrice: decimalToNumber(regions[0].discountedPrice),
+            giftCardExtraPrice: decimalToNumber(regions[0].giftCardExtraPrice),
+            customNamePrice: decimalToNumber(regions[0].customNamePrice),
             comingSoon: !!regions[0].comingSoon,
             onSale: !!regions[0].onSale,
           }
@@ -419,6 +423,11 @@ function applyRegionCurrency(mapped) {
       : override.discountedPrice != null
         ? override.discountedPrice
         : clean.discountedPrice,
+    // Per-region gift-option prices: null = keep the product's global charge.
+    giftCardExtraPrice:
+      override.giftCardExtraPrice != null ? override.giftCardExtraPrice : clean.giftCardExtraPrice,
+    customNamePrice:
+      override.customNamePrice != null ? override.customNamePrice : clean.customNamePrice,
     // This region's own coming-soon (the category cascade was already folded into
     // category.comingSoon in mapProduct) — the storefront ORs the two.
     comingSoon: !!override.comingSoon,
@@ -450,7 +459,18 @@ function regionPriceInclude(regionId, zoneId = null) {
     ? {
         ...released,
         ...zoneRow,
-        regions: { where: { regionId }, select: { regionId: true, price: true, discountedPrice: true, comingSoon: true, onSale: true } },
+        regions: {
+          where: { regionId },
+          select: {
+            regionId: true,
+            price: true,
+            discountedPrice: true,
+            giftCardExtraPrice: true,
+            customNamePrice: true,
+            comingSoon: true,
+            onSale: true,
+          },
+        },
       }
     : { ...released, ...zoneRow };
 }
@@ -673,13 +693,27 @@ function regionPriceFromRow(row) {
 // sending giftCardSelected/customName for a product that doesn't offer it is
 // silently worth 0, never charged. Shared by cart.service and order.service so
 // the enabled-AND-selected guard lives in exactly one place.
+//
+// Region overrides: when `productRow.regions` is a region-scoped ProductRegion
+// include (0-1 row, same shape cart/order already pass for price resolution),
+// a non-null giftCardExtraPrice / customNamePrice on that row wins over the
+// product's global charge. Null = fall back to Product.*.
 function optionExtraCharge(productRow, { giftCardSelected, customName } = {}) {
+  const override = Array.isArray(productRow.regions) ? productRow.regions[0] : null;
+  const giftExtra =
+    override && decimalToNumber(override.giftCardExtraPrice) != null
+      ? decimalToNumber(override.giftCardExtraPrice)
+      : decimalToNumber(productRow.giftCardExtraPrice) ?? 0;
+  const nameExtra =
+    override && decimalToNumber(override.customNamePrice) != null
+      ? decimalToNumber(override.customNamePrice)
+      : decimalToNumber(productRow.customNamePrice) ?? 0;
   let extra = 0;
   if (giftCardSelected && productRow.giftCardEnabled) {
-    extra += decimalToNumber(productRow.giftCardExtraPrice) ?? 0;
+    extra += giftExtra;
   }
   if (customName && productRow.customNameEnabled) {
-    extra += decimalToNumber(productRow.customNamePrice) ?? 0;
+    extra += nameExtra;
   }
   return extra;
 }
@@ -996,12 +1030,24 @@ function buildRegionPriceMap(regionPrices) {
       feeStepAmount: entry.cashArrangementFeeStepAmount,
       feeMarginPercent: entry.cashArrangementFeeMarginPercent,
     });
+    // Per-region gift-option prices (null = use product global). Accept 0 as a real
+    // free override; only blank/undefined means "no override".
+    const giftCardExtraPrice =
+      entry.giftCardExtraPrice != null && entry.giftCardExtraPrice !== ''
+        ? Number(entry.giftCardExtraPrice)
+        : null;
+    const customNamePrice =
+      entry.customNamePrice != null && entry.customNamePrice !== ''
+        ? Number(entry.customNamePrice)
+        : null;
     map.set(entry.regionId, {
       price,
       discountedPrice,
       deliveryLeadDays,
       cashArrangementFeeStepAmount: feeSchedule.feeStepAmount,
       cashArrangementFeeMarginPercent: feeSchedule.feeMarginPercent,
+      giftCardExtraPrice: Number.isFinite(giftCardExtraPrice) ? giftCardExtraPrice : null,
+      customNamePrice: Number.isFinite(customNamePrice) ? customNamePrice : null,
     });
   }
   return map;
@@ -1233,6 +1279,8 @@ async function createProduct(data) {
                     deliveryLeadDays: rp?.deliveryLeadDays ?? null,
                     cashArrangementFeeStepAmount: rp?.cashArrangementFeeStepAmount ?? null,
                     cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
+                    giftCardExtraPrice: rp?.giftCardExtraPrice ?? null,
+                    customNamePrice: rp?.customNamePrice ?? null,
                     comingSoon: comingSoonSet.has(regionId),
                     onSale: onSaleSet.has(regionId),
                   };
@@ -1414,6 +1462,8 @@ async function updateProduct(id, data) {
         deliveryLeadDays: true,
         cashArrangementFeeStepAmount: true,
         cashArrangementFeeMarginPercent: true,
+        giftCardExtraPrice: true,
+        customNamePrice: true,
         comingSoon: true,
         onSale: true,
       },
@@ -1429,6 +1479,8 @@ async function updateProduct(id, data) {
           deliveryLeadDays: r.deliveryLeadDays ?? null,
           cashArrangementFeeStepAmount: decimalToNumber(r.cashArrangementFeeStepAmount),
           cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
+          giftCardExtraPrice: decimalToNumber(r.giftCardExtraPrice),
+          customNamePrice: decimalToNumber(r.customNamePrice),
         },
       ])
     );
@@ -1654,6 +1706,8 @@ async function updateProduct(id, data) {
               deliveryLeadDays: rp?.deliveryLeadDays ?? null,
               cashArrangementFeeStepAmount: rp?.cashArrangementFeeStepAmount ?? null,
               cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
+              giftCardExtraPrice: rp?.giftCardExtraPrice ?? null,
+              customNamePrice: rp?.customNamePrice ?? null,
               // Preserve this region's coming-soon across a rewrite; new region → false.
               comingSoon: existingRegionComingSoon.get(regionId) ?? false,
               // Preserve this region's on-sale across a rewrite; new region → false.

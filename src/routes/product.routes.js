@@ -158,6 +158,15 @@ const createValidation = [
   body('regionPrices.*.cashArrangementFeeMarginPercent')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 1000 }).withMessage('regionPrices[].cashArrangementFeeMarginPercent must be between 0 and 1000'),
+  // Per-region gift-option price overrides (null = use product global charge).
+  body('regionPrices.*.giftCardExtraPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].giftCardExtraPrice must be between 0 and 99999999.99').bail()
+    .custom(isTwoDecimals).withMessage('regionPrices[].giftCardExtraPrice supports at most 2 decimal places'),
+  body('regionPrices.*.customNamePrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].customNamePrice must be between 0 and 99999999.99').bail()
+    .custom(isTwoDecimals).withMessage('regionPrices[].customNamePrice supports at most 2 decimal places'),
   // Per-delivery-zone "ships within N days" override (highest precedence). null clears it.
   body('zoneLeadDays').optional().isArray().withMessage('zoneLeadDays must be an array'),
   body('zoneLeadDays.*.zoneId').isString().trim().notEmpty().withMessage('zoneLeadDays[].zoneId is required'),
@@ -355,6 +364,15 @@ const updateValidation = [
   body('regionPrices.*.cashArrangementFeeMarginPercent')
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 1000 }).withMessage('regionPrices[].cashArrangementFeeMarginPercent must be between 0 and 1000'),
+  // Per-region gift-option price overrides (null = use product global charge).
+  body('regionPrices.*.giftCardExtraPrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].giftCardExtraPrice must be between 0 and 99999999.99').bail()
+    .custom(isTwoDecimals).withMessage('regionPrices[].giftCardExtraPrice supports at most 2 decimal places'),
+  body('regionPrices.*.customNamePrice')
+    .optional({ values: 'null' })
+    .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].customNamePrice must be between 0 and 99999999.99').bail()
+    .custom(isTwoDecimals).withMessage('regionPrices[].customNamePrice supports at most 2 decimal places'),
   // Per-delivery-zone "ships within N days" override (highest precedence). null clears it.
   body('zoneLeadDays').optional().isArray().withMessage('zoneLeadDays must be an array'),
   body('zoneLeadDays.*.zoneId').isString().trim().notEmpty().withMessage('zoneLeadDays[].zoneId is required'),
