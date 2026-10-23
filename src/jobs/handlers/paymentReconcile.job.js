@@ -1,40 +1,45 @@
 /**
  * payment.reconcile — recover online payments whose browser callback never arrived.
  *
- * MyFatoorah confirms a payment two ways: the browser redirect back to our callback
- * URL, and a server-to-server webhook. If BOTH are lost (customer closes the app mid-pay,
- * webhook misconfigured/dropped), a genuinely-paid order is stranded in PENDING_PAYMENT
- * and the customer is charged with no order — silent revenue loss. This scheduled job is
- * the safety net: it re-checks each pending invoice directly with MyFatoorah.
+ * MyFatoorah and Tabby both confirm via browser redirect + webhook. If BOTH are lost
+ * (customer closes mid-pay, webhook dropped), a genuinely-paid order is stranded in
+ * PENDING_PAYMENT. This job re-checks pending invoices/payments with the gateway.
  *
- * Window: only orders older than MIN_AGE minutes (so we don't fight an active checkout —
- * confirmOrderPayment marks a not-yet-paid invoice FAILED) and younger than MAX_AGE hours
- * (old abandoned attempts are handled by order.expire-unpaid). confirmOrderPayment is
- * idempotent, so re-checking an already-settled order is a safe no-op.
+ * Window: only orders older than MIN_AGE minutes and younger than MAX_AGE hours.
+ * confirm* helpers are idempotent.
  */
 
 const prisma = require('../../config/db');
 const orderService = require('../../services/order.service');
 const paymentService = require('../../services/payment.service');
+const tabbyService = require('../../services/tabby.service');
 const { QUEUES } = require('../queues');
 
 async function handle() {
-  if (!paymentService.isConfigured()) return { skipped: 'payment_not_configured' };
-
   const now = Date.now();
   const minAgeMs = Math.max(1, parseInt(process.env.PAYMENT_RECONCILE_MIN_AGE_MIN || '15', 10)) * 60_000;
   const maxAgeMs = Math.max(1, parseInt(process.env.PAYMENT_RECONCILE_MAX_AGE_HOURS || '24', 10)) * 3_600_000;
   const batch = Math.min(Math.max(parseInt(process.env.PAYMENT_RECONCILE_BATCH || '50', 10), 1), 200);
 
+  const methods = [];
+  if (paymentService.isConfigured()) methods.push('MYFATOORAH');
+  if (tabbyService.isConfigured()) methods.push('TABBY');
+  if (methods.length === 0) return { skipped: 'payment_not_configured' };
+
   const orders = await prisma.order.findMany({
     where: {
-      paymentMethod: 'MYFATOORAH',
+      paymentMethod: { in: methods },
       status: 'PENDING_PAYMENT',
       paymentStatus: { in: ['UNPAID', 'FAILED'] },
       paymentInvoiceId: { not: null },
       createdAt: { lte: new Date(now - minAgeMs), gte: new Date(now - maxAgeMs) },
     },
-    select: { id: true, paymentInvoiceId: true, region: { select: { code: true } } },
+    select: {
+      id: true,
+      paymentInvoiceId: true,
+      paymentMethod: true,
+      region: { select: { code: true } },
+    },
     orderBy: { createdAt: 'asc' },
     take: batch,
   });
@@ -45,7 +50,12 @@ async function handle() {
 
   for (const o of orders) {
     try {
-      const res = await orderService.confirmOrderPayment(o.paymentInvoiceId, 'InvoiceId', o.region?.code || null);
+      let res;
+      if (o.paymentMethod === 'TABBY') {
+        res = await orderService.confirmTabbyPayment(o.paymentInvoiceId);
+      } else {
+        res = await orderService.confirmOrderPayment(o.paymentInvoiceId, 'InvoiceId', o.region?.code || null);
+      }
       if (res.isPaid) confirmed += 1;
       else stillPending += 1;
     } catch (err) {

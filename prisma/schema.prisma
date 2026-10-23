@@ -74,6 +74,11 @@ model Region {
   // online payment is on = effectively no online method (storefront falls back to COD).
   applePayEnabled                Boolean  @default(true)
   cardPaymentEnabled             Boolean  @default(true)
+  // Whether Tabby (Pay in 4 BNPL) is offered in this region. Independent of
+  // onlinePaymentEnabled (MyFatoorah card/Apple Pay) — a region can offer Tabby
+  // with or without card payments. Default false (opt-in once Tabby sandbox/live
+  // keys are configured and the region currency is supported).
+  tabbyEnabled                   Boolean  @default(false)
   // ISO 3166-1 alpha-2 code (e.g. "AE", "SA") — renders the region's flag in the
   // storefront's country/region pickers. Null shows a neutral placeholder until
   // an admin sets it (deliberately not required — regions worked without a flag
@@ -1350,11 +1355,12 @@ model Order {
   appliedPromoCodeId          String?
   paymentMethod               PaymentMethod @default(COD)
   status                      OrderStatus   @default(PENDING_PAYMENT)
-  /// Online-payment state. COD orders stay UNPAID until delivered/collected; MyFatoorah orders flip to PAID once GetPaymentStatus confirms it.
+  /// Online-payment state. COD orders stay UNPAID until delivered/collected; MyFatoorah /
+  /// Tabby orders flip to PAID once the gateway confirms (and Tabby capture succeeds).
   paymentStatus               PaymentStatus @default(UNPAID)
-  /// MyFatoorah InvoiceId returned by SendPayment (the payment we created for this order). Null for COD.
+  /// Gateway payment reference: MyFatoorah InvoiceId, or Tabby payment.id. Null for COD.
   paymentInvoiceId            String?
-  /// MyFatoorah transaction/payment id captured at confirmation (from GetPaymentStatus). Null for COD.
+  /// Gateway transaction id at confirmation (MyFatoorah PaymentId, or Tabby capture id). Null for COD.
   paymentTransactionId        String?
   /// Soft ref to the saved Address used at checkout (may be null for legacy orders or if address was deleted).
   addressId                   String?
@@ -1827,6 +1833,7 @@ enum DeliveryType {
 enum PaymentMethod {
   COD
   MYFATOORAH
+  TABBY
 }
 
 enum PaymentStatus {

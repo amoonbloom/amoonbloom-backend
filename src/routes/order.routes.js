@@ -171,8 +171,8 @@ const checkoutBody = [
   body('addressId').optional().isUUID().withMessage('addressId must be a valid UUID'),
   body('paymentMethod')
     .optional()
-    .isIn(['COD', 'MYFATOORAH'])
-    .withMessage('paymentMethod must be COD or MYFATOORAH'),
+    .isIn(['COD', 'MYFATOORAH', 'TABBY'])
+    .withMessage('paymentMethod must be COD, MYFATOORAH, or TABBY'),
   body('promoCode').optional().trim().isLength({ max: 50 }).withMessage('promoCode too long'),
   body('deliveryType').optional().isIn(['STANDARD', 'SCHEDULED']).withMessage('deliveryType must be STANDARD or SCHEDULED'),
   body('scheduledDeliveryAt').optional({ nullable: true }).isISO8601().withMessage('scheduledDeliveryAt must be a valid ISO date'),
@@ -335,6 +335,10 @@ const guestCheckoutBody = [
   body('shippingAddress.country').optional({ nullable: true }).trim(),
   body('shippingAddress.area').trim().notEmpty().withMessage('Area is required'),
   body('shippingAddress.deliveryZoneId').optional({ checkFalsy: true }).isUUID().withMessage('deliveryZoneId must be a valid id'),
+  body('paymentMethod')
+    .optional()
+    .isIn(['COD', 'MYFATOORAH', 'TABBY'])
+    .withMessage('paymentMethod must be COD, MYFATOORAH, or TABBY'),
   shortAddressRequired,
 ];
 
@@ -385,7 +389,7 @@ router.post(
 const buyNowBody = [
   body('productId').isUUID().withMessage('Valid productId is required'),
   body('quantity').optional().isInt({ min: 1 }).withMessage('quantity must be a positive integer'),
-  body('paymentMethod').optional().isIn(['COD', 'MYFATOORAH']).withMessage('paymentMethod must be COD or MYFATOORAH'),
+  body('paymentMethod').optional().isIn(['COD', 'MYFATOORAH', 'TABBY']).withMessage('paymentMethod must be COD, MYFATOORAH, or TABBY'),
   body('addressId').optional().isUUID().withMessage('addressId must be a valid UUID'),
   body('shippingAddress').optional().isObject().withMessage('shippingAddress must be an object'),
   body('promoCode').optional().trim().isLength({ max: 50 }).withMessage('promoCode too long'),
@@ -601,6 +605,32 @@ router.get('/payment/error', orderController.paymentError);
  *         description: Signature verification failed (only when a webhook secret is set)
  */
 router.post('/payment/webhook', orderController.paymentWebhook);
+
+/**
+ * @swagger
+ * /orders/payment/tabby/callback:
+ *   get:
+ *     summary: Tabby success return URL
+ *     description: |
+ *       Browser return after Tabby Pay-in-4. Re-verifies via Tabby GET payment, captures when
+ *       AUTHORIZED, then redirects to the storefront success/error page (`ret` query).
+ *     tags: [Orders]
+ */
+router.get('/payment/tabby/callback', orderController.tabbyCallback);
+router.get('/payment/tabby/cancel', orderController.tabbyCancel);
+router.get('/payment/tabby/failure', orderController.tabbyFailure);
+
+/**
+ * @swagger
+ * /orders/payment/tabby/webhook:
+ *   post:
+ *     summary: Tabby webhook (server-to-server payment notification)
+ *     description: |
+ *       Reliable async confirmation from Tabby. Register via POST /api/v1/webhooks with
+ *       X-Merchant-Code. Optional auth header X-Tabby-Auth when TABBY_WEBHOOK_SECRET is set.
+ *     tags: [Orders]
+ */
+router.post('/payment/tabby/webhook', orderController.tabbyWebhook);
 
 /**
  * @swagger

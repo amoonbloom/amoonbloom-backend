@@ -256,7 +256,12 @@ function renderOrderConfirmation(order) {
     order.shippingCountry,
   ].filter(Boolean);
 
-  const paymentMethodLabel = order.paymentMethod === 'MYFATOORAH' ? 'Card (online)' : 'Cash on delivery';
+  const paymentMethodLabel =
+    order.paymentMethod === 'MYFATOORAH'
+      ? 'Card (online)'
+      : order.paymentMethod === 'TABBY'
+        ? 'Tabby (Pay in 4)'
+        : 'Cash on delivery';
 
   const dd = orderDeliveryDates(order);
   const deliveryRows = [

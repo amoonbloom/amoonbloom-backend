@@ -4,6 +4,7 @@ const cartService = require('../services/cart.service');
 const notify = require('../notifications/notify');
 const promoCodeService = require('../services/promoCode.service');
 const paymentService = require('../services/payment.service');
+const tabbyService = require('../services/tabby.service');
 const regionService = require('../services/region.service');
 const deliveryZoneService = require('../services/deliveryZone.service');
 const productService = require('../services/product.service');
@@ -201,7 +202,7 @@ function toOrderResponsePayload(order) {
   };
 }
 
-const VALID_PAYMENT_METHODS = ['COD', 'MYFATOORAH'];
+const VALID_PAYMENT_METHODS = ['COD', 'MYFATOORAH', 'TABBY'];
 
 const VALID_DELIVERY_TYPES = ['STANDARD', 'SCHEDULED'];
 // How far ahead a customer may book a scheduled delivery (keeps the picker/admin list
@@ -409,10 +410,12 @@ async function createOrderCore(userId, params = {}, opts = {}) {
 
   // Every order — online or COD — is placed immediately as a real, visible
   // PENDING_PAYMENT order (WooCommerce parity: "Pending payment" is a normal order
-  // list entry, not a hidden state). Online payment: the cart is kept and no "order
-  // placed" push fires yet — confirmOrderPayment/finalizePaidOrder moves it to
-  // PROCESSING once paid. COD: cart cleared, push sent immediately (unchanged).
-  const isOnlinePayment = paymentMethod === 'MYFATOORAH';
+  // list entry, not a hidden state). Online payment (MyFatoorah or Tabby): the cart
+  // is kept and no "order placed" push fires yet — confirm*/finalizePaidOrder moves
+  // it to PROCESSING once paid. COD: cart cleared, push sent immediately (unchanged).
+  const isOnlinePayment = paymentMethod === 'MYFATOORAH' || paymentMethod === 'TABBY';
+  const isMyFatoorah = paymentMethod === 'MYFATOORAH';
+  const isTabby = paymentMethod === 'TABBY';
   const initialStatus = 'PENDING_PAYMENT';
 
   // Recipient identity (fullName + phone) is sourced from the user profile so the
@@ -459,16 +462,33 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // the unified resolveDeliveryLeadDays chain (product/category override → zone/region
   // standard → default), and the order takes the slowest line — see below.
 
-  // Online payment is offered per region via Region.onlinePaymentEnabled (admin toggle).
+  // MyFatoorah online payment is offered per region via Region.onlinePaymentEnabled.
   // The gateway account is currency-scoped (e.g. an AED-only Apple Pay certificate), so a
-  // region is only turned on once its currency is confirmed chargeable — the invoice below
-  // charges the order's own currency (orderCurrency), not a fixed global one. When the
-  // region is off, MYFATOORAH is rejected here and the storefront hides the online option;
-  // Cash on Delivery still works.
-  if (isOnlinePayment && !orderRegion?.onlinePaymentEnabled) {
+  // region is only turned on once its currency is confirmed chargeable. When off,
+  // MYFATOORAH is rejected here; Cash on Delivery and Tabby (separate toggle) still work.
+  if (isMyFatoorah && !orderRegion?.onlinePaymentEnabled) {
     return {
       order: null,
       error: 'Online payment isn’t available for this region yet — please choose Cash on Delivery.',
+    };
+  }
+  // Tabby (Pay in 4) is a separate per-region opt-in — independent of MyFatoorah.
+  if (isTabby && !orderRegion?.tabbyEnabled) {
+    return {
+      order: null,
+      error: 'Tabby isn’t available for this region yet — please choose another payment method.',
+    };
+  }
+  if (isTabby && !tabbyService.isConfigured()) {
+    return {
+      order: null,
+      error: 'Tabby payment is temporarily unavailable — please choose another payment method.',
+    };
+  }
+  if (isTabby && !tabbyService.isCurrencySupported(orderCurrency)) {
+    return {
+      order: null,
+      error: `Tabby isn’t available for ${orderCurrency} yet — please choose another payment method.`,
     };
   }
 
@@ -2260,41 +2280,106 @@ async function updateOrderStatus(orderId, status, { allowedRegionIds = null } = 
 }
 
 /**
- * Start an online payment for an existing order. Loads the order, asks MyFatoorah
- * to create a payment, stores the InvoiceId on the order, and returns the hosted
- * payment URL for the app to open. Caller must own the order.
+ * Start an online payment for an existing order (MyFatoorah hosted page OR Tabby HPP).
+ * Branches on order.paymentMethod. Stores the gateway payment/invoice id on the order
+ * and returns { paymentUrl, invoiceId }. Caller must own the order (or userId null for guest).
  *
  * Returns { error } on a guard failure (wrong owner / state / method), otherwise
  * { paymentUrl, invoiceId }.
  */
-async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) {
+async function initiateOrderPayment(orderId, userId, { returnUrl = null, lang = 'en' } = {}) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, userId },
     select: {
       id: true,
+      orderNumber: true,
       totalAmount: true,
+      taxAmount: true,
+      shippingAmount: true,
+      discountAmount: true,
       currency: true,
       status: true,
       paymentStatus: true,
       paymentMethod: true,
       shippingFullName: true,
       shippingPhone: true,
+      shippingStreetAddress: true,
+      shippingApartment: true,
+      shippingCity: true,
+      shippingArea: true,
+      shippingPostalCode: true,
+      shippingShortAddress: true,
       guestEmail: true,
-      user: { select: { email: true } },
-      // region.code selects the gateway profile; cardPaymentEnabled gates the hosted
-      // page (which is the card entry point for the /pay flow).
-      region: { select: { code: true, cardPaymentEnabled: true } },
+      user: { select: { email: true, createdAt: true } },
+      // region.code selects the MyFatoorah gateway profile; cardPaymentEnabled gates the
+      // MyFatoorah hosted page; tabbyEnabled gates Tabby Pay-in-4.
+      region: { select: { code: true, cardPaymentEnabled: true, tabbyEnabled: true } },
+      items: {
+        select: {
+          productId: true,
+          productTitle: true,
+          quantity: true,
+          price: true,
+        },
+      },
     },
   });
 
   if (!order) return { error: 'Order not found' };
-  if (order.paymentMethod !== 'MYFATOORAH') {
+  if (order.paymentMethod !== 'MYFATOORAH' && order.paymentMethod !== 'TABBY') {
     return { error: 'This order is not set up for online payment' };
   }
   if (order.paymentStatus === 'PAID') return { error: 'Order is already paid' };
   // Payable only while awaiting payment (covers first attempt and retry after a failed one).
   if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
   if (Number(order.totalAmount) <= 0) return { error: 'Order total must be greater than zero' };
+
+  const customer = {
+    name: order.shippingFullName,
+    phone: order.shippingPhone,
+    email: order.user?.email || order.guestEmail,
+    userId: userId || null,
+    registeredSince: order.user?.createdAt || null,
+  };
+
+  // ── Tabby Pay-in-4 ──────────────────────────────────────────────────────────
+  if (order.paymentMethod === 'TABBY') {
+    if (order.region && order.region.tabbyEnabled === false) {
+      return { error: 'Tabby isn’t available for this region.' };
+    }
+    if (!tabbyService.isConfigured()) {
+      return { error: 'Tabby payment is temporarily unavailable.' };
+    }
+    if (!customer.email || !String(customer.email).includes('@')) {
+      return { error: 'An email address is required to pay with Tabby.' };
+    }
+    if (!customer.phone || String(customer.phone).replace(/\D/g, '').length < 8) {
+      return { error: 'A phone number is required to pay with Tabby.' };
+    }
+
+    const items = (order.items || []).map((it) => ({
+      productId: it.productId,
+      title: it.productTitle || 'Item',
+      quantity: it.quantity,
+      // OrderItem.price is the per-unit snapshot (lineTotal = price × quantity).
+      unitPrice: Number(it.price),
+      category: 'General',
+    }));
+
+    const { paymentId, webUrl } = await tabbyService.createCheckoutSession(order, customer, items, {
+      returnUrl,
+      lang,
+    });
+
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { paymentInvoiceId: paymentId, paymentStatus: 'UNPAID' },
+    });
+
+    return { paymentUrl: webUrl, invoiceId: paymentId };
+  }
+
+  // ── MyFatoorah (card / Apple Pay hosted page) ───────────────────────────────
   // The hosted page is where cards are entered, so it requires card payment to be enabled
   // for the region. (Apple Pay has its own session endpoints gated by applePayEnabled.)
   if (order.region && order.region.cardPaymentEnabled === false) {
@@ -2303,7 +2388,7 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
 
   const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(
     order,
-    { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email || order.guestEmail },
+    customer,
     { regionCode: order.region?.code || null, returnUrl }
   );
 
@@ -2619,6 +2704,195 @@ async function confirmOrderPayment(key, keyType = 'PaymentId', regionCode = null
 }
 
 /**
+ * Verify a Tabby payment (authoritative server-side check), capture when AUTHORIZED,
+ * then place the order via the same PAID claim + finalizePaidOrder path as MyFatoorah.
+ *
+ * `paymentId` is Tabby's payment.id (stored on Order.paymentInvoiceId at session create).
+ * Idempotent: AUTHORIZED→capture (reference_id = capture-{orderId}), CLOSED already
+ * captured, concurrent callback+webhook safe via the PAID claim.
+ *
+ * Returns { isPaid, orderId, status, ...flags }.
+ */
+async function confirmTabbyPayment(paymentId) {
+  if (!paymentId) {
+    return { isPaid: false, orderId: null, status: null, reason: 'missing_payment_id' };
+  }
+
+  let payment;
+  try {
+    payment = await tabbyService.getPayment(paymentId);
+  } catch (err) {
+    console.error(`[tabby] getPayment failed for ${paymentId}:`, err.message);
+    throw err;
+  }
+
+  const status = payment.status;
+  // Prefer order.reference_id from Tabby; fall back to looking up by paymentInvoiceId.
+  let orderId = payment.orderId || null;
+  let order = null;
+
+  if (orderId) {
+    order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        orderNumber: true,
+        userId: true,
+        totalAmount: true,
+        currency: true,
+        status: true,
+        paymentStatus: true,
+        paymentMethod: true,
+        clearCartOnPayment: true,
+        inventoryDeducted: true,
+        guestEmail: true,
+        user: { select: { email: true } },
+      },
+    });
+  }
+
+  if (!order) {
+    order = await prisma.order.findFirst({
+      where: { paymentInvoiceId: String(paymentId), paymentMethod: 'TABBY' },
+      select: {
+        id: true,
+        orderNumber: true,
+        userId: true,
+        totalAmount: true,
+        currency: true,
+        status: true,
+        paymentStatus: true,
+        paymentMethod: true,
+        clearCartOnPayment: true,
+        inventoryDeducted: true,
+        guestEmail: true,
+        user: { select: { email: true } },
+      },
+    });
+    orderId = order?.id || null;
+  }
+
+  if (!order) {
+    return { isPaid: false, orderId: null, status, reason: 'Order not found' };
+  }
+
+  if (order.paymentMethod !== 'TABBY') {
+    return { isPaid: false, orderId: order.id, status, reason: 'not_a_tabby_order' };
+  }
+
+  // Already settled — re-drive finalize if stranded PAID+PENDING_PAYMENT.
+  if (order.paymentStatus === 'PAID') {
+    if (order.status === 'PENDING_PAYMENT') {
+      await finalizePaidOrder(order, { firstPlacement: false });
+    }
+    return { isPaid: true, orderId: order.id, status: 'Paid', alreadyProcessed: true };
+  }
+
+  if (status === 'REJECTED' || status === 'EXPIRED') {
+    await prisma.order.updateMany({
+      where: { id: order.id, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+      data: { paymentStatus: 'FAILED' },
+    });
+    return { isPaid: false, orderId: order.id, status };
+  }
+
+  if (status === 'CREATED') {
+    // Customer has not finished Tabby checkout yet.
+    return { isPaid: false, orderId: order.id, status, reason: 'payment_not_finished' };
+  }
+
+  if (status !== 'AUTHORIZED' && status !== 'CLOSED') {
+    return { isPaid: false, orderId: order.id, status, reason: 'unexpected_status' };
+  }
+
+  // If Tabby returned a reference_id, it MUST match this order — prevents cross-order settlement.
+  if (payment.orderId && payment.orderId !== order.id) {
+    console.error(
+      `[tabby] payment ${paymentId} reference_id=${payment.orderId} does not match order ${order.id}`
+    );
+    return { isPaid: false, orderId: order.id, status, reason: 'order_reference_mismatch' };
+  }
+
+  // Amount / currency check BEFORE capture (and before marking PAID). Capturing an
+  // underpaid AUTHORIZED payment would take money for the wrong total.
+  const chargedCurrency = order.currency || 'AED';
+  const currencyKnown = !!payment.currency;
+  const sameCurrency = currencyKnown && payment.currency === chargedCurrency;
+  const underpaid =
+    payment.amount != null && payment.amount + 0.01 < Number(order.totalAmount);
+  if (underpaid && (sameCurrency || !currencyKnown)) {
+    console.error(
+      `[tabby] order ${order.id} UNDERPAID: gateway ${payment.amount} ${payment.currency} vs order total ${order.totalAmount} — not capturing`
+    );
+    await prisma.order.updateMany({
+      where: { id: order.id, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+      data: { paymentStatus: 'FAILED' },
+    });
+    return { isPaid: false, orderId: order.id, status, reason: 'amount_mismatch_underpaid' };
+  }
+  if (currencyKnown && !sameCurrency) {
+    console.error(
+      `[tabby] order ${order.id} currency mismatch: gateway ${payment.currency} vs order ${chargedCurrency} — not capturing`
+    );
+    await prisma.order.updateMany({
+      where: { id: order.id, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+      data: { paymentStatus: 'FAILED' },
+    });
+    return { isPaid: false, orderId: order.id, status, reason: 'currency_mismatch' };
+  }
+
+  // AUTHORIZED → capture (full amount). CLOSED → already captured (e.g. webhook race).
+  let settled = status === 'CLOSED';
+  let transactionId = payment.captures?.[0]?.id || payment.id;
+
+  if (status === 'AUTHORIZED') {
+    // If captures already present, this is a capture-confirmation webhook — don't re-capture.
+    if (payment.captures && payment.captures.length > 0) {
+      settled = true;
+      transactionId = payment.captures[0].id || payment.id;
+    } else {
+      try {
+        const captured = await tabbyService.capturePayment(paymentId, {
+          amount: Number(order.totalAmount),
+          referenceId: `capture-${order.id}`,
+        });
+        settled = captured.status === 'CLOSED' || (captured.captures && captured.captures.length > 0);
+        transactionId = captured.captures?.[0]?.id || captured.id || payment.id;
+      } catch (err) {
+        // Idempotent retry: if already closed, treat as success.
+        const msg = String(err.message || '').toLowerCase();
+        if (msg.includes('closed') || msg.includes('already')) {
+          settled = true;
+        } else {
+          console.error(`[tabby] capture failed for order ${order.id}:`, err.message);
+          throw err;
+        }
+      }
+    }
+  }
+
+  if (!settled) {
+    return { isPaid: false, orderId: order.id, status, reason: 'not_captured' };
+  }
+
+  const claim = await prisma.order.updateMany({
+    where: { id: order.id, paymentStatus: { not: 'PAID' } },
+    data: { paymentStatus: 'PAID', paymentTransactionId: String(transactionId) },
+  });
+  if (claim.count === 0) {
+    return { isPaid: true, orderId: order.id, status: 'Paid', alreadyProcessed: true };
+  }
+
+  await finalizePaidOrder(order, { firstPlacement: true });
+
+  if (order.status === 'CANCELLED') {
+    return { isPaid: true, orderId: order.id, status: 'Paid', warning: 'order_cancelled_needs_refund' };
+  }
+
+  return { isPaid: true, orderId: order.id, status: 'Paid' };
+}
+
+/**
  * Normalize incoming quote line items into the shape the pricing helpers expect.
  * Drops anything without a productId or a positive integer quantity.
  */
@@ -2847,4 +3121,5 @@ module.exports = {
   createPaymentSession,
   executeOrderPayment,
   confirmOrderPayment,
+  confirmTabbyPayment,
 };

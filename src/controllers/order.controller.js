@@ -1,5 +1,7 @@
+const prisma = require('../config/db');
 const orderService = require('../services/order.service');
 const paymentService = require('../services/payment.service');
+const tabbyService = require('../services/tabby.service');
 const regionService = require('../services/region.service');
 const { getOrdersForExport } = require('../services/export/orderExport.service');
 const { renderOrdersExcel } = require('../services/export/orderExcel.service');
@@ -325,16 +327,17 @@ function safeStorefrontUrl(urlStr) {
   return allowedStorefrontOrigins().has(u.origin) ? urlStr : null;
 }
 
-// POST /orders/:id/pay — start an online (MyFatoorah) payment for the user's order.
-// Returns the hosted payment URL to open (Apple Pay / cards). The web checkout also sends a
-// `returnUrl` (its order-success page) so, after paying, the browser is sent back to the
-// website instead of a bare backend page. Mobile sends none and keeps its in-app behavior.
+// POST /orders/:id/pay — start an online payment (MyFatoorah OR Tabby) for the user's order.
+// Returns the hosted payment URL to open. Branches on order.paymentMethod server-side.
+// The web checkout also sends a `returnUrl` (its order-success page) so, after paying,
+// the browser is sent back to the website. Mobile sends none and keeps its in-app behavior.
 async function initiatePayment(req, res, next) {
   try {
     const { id } = req.params;
     const userId = req.userId;
     const returnUrl = safeStorefrontUrl(req.body?.returnUrl);
-    const result = await orderService.initiateOrderPayment(id, userId, { returnUrl });
+    const lang = req.body?.lang === 'ar' ? 'ar' : 'en';
+    const result = await orderService.initiateOrderPayment(id, userId, { returnUrl, lang });
     if (result.error) {
       const status = result.error === 'Order not found' ? 404 : 400;
       return error(res, result.error, status);
@@ -354,8 +357,9 @@ async function initiateGuestPayment(req, res, next) {
   try {
     const { id } = req.params;
     const returnUrl = safeStorefrontUrl(req.body?.returnUrl);
+    const lang = req.body?.lang === 'ar' ? 'ar' : 'en';
     // userId = null → initiateOrderPayment matches only guest orders (userId IS NULL).
-    const result = await orderService.initiateOrderPayment(id, null, { returnUrl });
+    const result = await orderService.initiateOrderPayment(id, null, { returnUrl, lang });
     if (result.error) {
       const status = result.error === 'Order not found' ? 404 : 400;
       return error(res, result.error, status);
@@ -511,6 +515,102 @@ async function paymentWebhook(req, res) {
   }
 }
 
+// ── Tabby return + webhook ────────────────────────────────────────────────────
+
+/**
+ * Shared Tabby browser-return handler (success / cancel / failure URLs).
+ * Never trusts which URL was hit — re-verifies via Tabby GET payment + capture.
+ * Query: payment_id (or paymentId), oid (order id we appended), ret (storefront return).
+ */
+async function handleTabbyReturn(req, res) {
+  const paymentId =
+    req.query.payment_id || req.query.paymentId || req.query.PaymentId || null;
+  const orderHint = req.query.oid ? String(req.query.oid) : null;
+  const returnBase = safeStorefrontUrl(req.query.ret);
+  const failUrl = returnBase ? returnBase.replace('/order/success', '/order/error') : null;
+
+  // Resolve payment id: prefer query, else look up by order id we stamped on merchant_urls.
+  let resolvedPaymentId = paymentId ? String(paymentId) : null;
+  if (!resolvedPaymentId && orderHint) {
+    try {
+      const row = await prisma.order.findUnique({
+        where: { id: orderHint },
+        select: { paymentInvoiceId: true, paymentMethod: true },
+      });
+      if (row?.paymentMethod === 'TABBY' && row.paymentInvoiceId) {
+        resolvedPaymentId = row.paymentInvoiceId;
+      }
+    } catch (err) {
+      console.warn('[tabby] return lookup by oid failed:', err.message);
+    }
+  }
+
+  if (!resolvedPaymentId) {
+    if (failUrl) return res.redirect(302, failUrl);
+    return res.status(400).type('html').send(paymentResultPage(false, null));
+  }
+
+  try {
+    const result = await orderService.confirmTabbyPayment(resolvedPaymentId);
+    if (returnBase) {
+      const target = result.isPaid
+        ? `${returnBase}${returnBase.includes('?') ? '&' : '?'}id=${encodeURIComponent(result.orderId || orderHint || '')}`
+        : failUrl;
+      return res.redirect(302, target);
+    }
+    return res.status(200).type('html').send(paymentResultPage(result.isPaid, result.orderId));
+  } catch (err) {
+    console.error('[tabby] return handler error:', err.message);
+    if (failUrl) return res.redirect(302, failUrl);
+    return res.status(200).type('html').send(paymentResultPage(false, null));
+  }
+}
+
+const tabbyCallback = handleTabbyReturn;
+const tabbyCancel = handleTabbyReturn;
+const tabbyFailure = handleTabbyReturn;
+
+/**
+ * POST /orders/payment/tabby/webhook — Tabby server-to-server notification.
+ * Payload status is lowercase ("authorized" | "closed" | …). Always re-verify via
+ * confirmTabbyPayment (get + capture). Optional X-Tabby-Auth header when secret set.
+ *
+ * If the order is not found yet (race with our checkout commit), return 404 so Tabby retries.
+ */
+async function tabbyWebhook(req, res) {
+  try {
+    if (!tabbyService.verifyWebhookAuth(req)) {
+      console.warn('[tabby] webhook auth check failed');
+      return res.status(401).json({ received: false });
+    }
+
+    const body = req.body || {};
+    const paymentId = body.id != null ? String(body.id) : null;
+    const status = String(body.status || '').toLowerCase();
+
+    if (!paymentId) {
+      console.warn('[tabby] webhook missing payment id');
+      return res.status(200).json({ received: true });
+    }
+
+    // Capture confirmation (authorized + captures[]) — no action beyond confirm (idempotent).
+    // authorized / closed are the settle triggers; rejected / expired mark FAILED.
+    if (status === 'authorized' || status === 'closed' || status === 'rejected' || status === 'expired') {
+      const result = await orderService.confirmTabbyPayment(paymentId);
+      // Order not in DB yet — ask Tabby to retry (per their webhook edge-case guidance).
+      if (result.reason === 'Order not found') {
+        return res.status(404).json({ received: false, reason: 'order_not_found' });
+      }
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error('[tabby] webhook error:', err.message);
+    // Transient failure: non-200 so Tabby retries.
+    return res.status(500).json({ received: false });
+  }
+}
+
 // POST /orders/quote — price a cart WITHOUT creating an order (totals preview: item subtotal +
 // promo discount + zone-accurate delivery + VAT). optionalAuth: works for signed-in users
 // (falls back to their server cart when `items` is omitted) and guests. Lets the bag/checkout
@@ -547,4 +647,8 @@ module.exports = {
   paymentCallback,
   paymentError,
   paymentWebhook,
+  tabbyCallback,
+  tabbyCancel,
+  tabbyFailure,
+  tabbyWebhook,
 };

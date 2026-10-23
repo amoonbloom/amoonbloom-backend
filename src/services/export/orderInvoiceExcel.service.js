@@ -112,8 +112,16 @@ const PAYMENT_STATUS_LABEL = {
 };
 
 const PAYMENT_METHOD_LABEL = {
-  en: { COD: 'Cash on Delivery', MYFATOORAH: 'Pay online (Card / Apple Pay)' },
-  ar: { COD: 'الدفع عند الاستلام', MYFATOORAH: 'ادفع إلكترونيا (بطاقة / Apple Pay)' },
+  en: {
+    COD: 'Cash on Delivery',
+    MYFATOORAH: 'Pay online (Card / Apple Pay)',
+    TABBY: 'Tabby (Pay in 4)',
+  },
+  ar: {
+    COD: 'الدفع عند الاستلام',
+    MYFATOORAH: 'ادفع إلكترونيا (بطاقة / Apple Pay)',
+    TABBY: 'تابي (ادفع على 4)',
+  },
 };
 
 /** yyyy-mm-dd — locale-independent, unambiguous for an invoice cell. */

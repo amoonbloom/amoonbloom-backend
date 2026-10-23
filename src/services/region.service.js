@@ -41,6 +41,7 @@ const REGION_SELECT = {
   onlinePaymentEnabled: true,
   applePayEnabled: true,
   cardPaymentEnabled: true,
+  tabbyEnabled: true,
   iso2: true,
   urlSlug: true,
   contactEmail: true,
@@ -112,6 +113,8 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
   // codEnabled/sameDayEnabled convention above.
   set('applePayEnabled', data.applePayEnabled != null, parseBool(data.applePayEnabled, true));
   set('cardPaymentEnabled', data.cardPaymentEnabled != null, parseBool(data.cardPaymentEnabled, true));
+  // Tabby is opt-in (default false). Gate on != null so a partial update with null leaves it unchanged.
+  set('tabbyEnabled', data.tabbyEnabled != null, parseBool(data.tabbyEnabled, false));
   return payload;
 }
 
