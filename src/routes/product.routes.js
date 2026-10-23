@@ -226,8 +226,8 @@ const createValidation = [
     .withMessage('images must be an array of image URLs'),
   body('images')
     .optional()
-    .custom((val) => !Array.isArray(val) || val.length <= 10)
-    .withMessage('Maximum 10 images per product'),
+    .custom((val) => !Array.isArray(val) || val.length <= 20)
+    .withMessage('Maximum 20 images per product'),
   body('images.*')
     .optional()
     .isString()
@@ -426,8 +426,8 @@ const updateValidation = [
     .withMessage('images must be an array of image URLs'),
   body('images')
     .optional()
-    .custom((val) => !Array.isArray(val) || val.length <= 10)
-    .withMessage('Maximum 10 images per product'),
+    .custom((val) => !Array.isArray(val) || val.length <= 20)
+    .withMessage('Maximum 20 images per product'),
   body('images.*')
     .optional()
     .isString()

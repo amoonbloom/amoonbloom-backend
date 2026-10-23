@@ -98,7 +98,7 @@ const PRODUCT_OPTION_REQUIRED_PAIRS = [{ src: 'title', dst: 'title_ar' }];
 const PRODUCT_VARIANT_REQUIRED_PAIRS = [{ src: 'optionValue', dst: 'optionValue_ar' }];
 const PRODUCT_VARIANT_COLOR_REQUIRED_PAIRS = [{ src: 'label', dst: 'label_ar' }];
 
-const MAX_IMAGES = 10;
+const MAX_IMAGES = 20;
 const ACTIVE_ORDER_STATUSES = ['PENDING_PAYMENT', 'PROCESSING', 'ON_HOLD'];
 const decimalToNumber = (v) => (v == null ? null : Number(v));
 

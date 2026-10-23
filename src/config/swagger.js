@@ -829,10 +829,10 @@ const options = {
             },
             images: {
               type: 'array',
-              maxItems: 10,
+              maxItems: 20,
               items: { type: 'string', format: 'uri', description: 'Public image URL (e.g. from POST /upload/image)' },
               description:
-                'Optional. Up to 10 image URLs in display order (first = primary / thumbnail). Upload files via POST /upload/image?path=products, then use the returned urls here.',
+                'Optional. Up to 20 image URLs in display order (first = primary / thumbnail). Upload files via POST /upload/image?path=products, then use the returned urls here.',
               example: ['https://cdn.example.com/products/1.jpg', 'https://cdn.example.com/products/2.jpg'],
             },
             productOptions: {
@@ -953,10 +953,10 @@ const options = {
             },
             images: {
               type: 'array',
-              maxItems: 10,
+              maxItems: 20,
               items: { type: 'string', format: 'uri', description: 'Public image URL (e.g. from POST /upload/image)' },
               description:
-                'When present, **replaces** the full gallery (order = array order, first = thumbnail). Up to 10 URLs. `[]` removes all images.',
+                'When present, **replaces** the full gallery (order = array order, first = thumbnail). Up to 20 URLs. `[]` removes all images.',
               example: ['https://cdn.example.com/products/1.jpg', 'https://cdn.example.com/products/2.jpg'],
             },
             productOptions: {
