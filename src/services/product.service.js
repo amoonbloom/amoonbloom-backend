@@ -390,22 +390,35 @@ function mapProduct(product) {
 /**
  * Overlay the requesting region's price override (if any) onto an already-mapped
  * product for STOREFRONT reads: `price`/`discountedPrice` become the region's override
- * (falling back to the base AED value when no override is set for that region), so the
- * frontend reads the same field names regardless of region — no currency-branching
- * needed client-side. Relies on `mapped._regionPriceRow`, set by mapProduct from a
- * region-scoped ProductRegion include (see REGION_PRICE_INCLUDE below).
- * Staff/admin reads should NOT call this — they get the raw base price + regionPrices
- * array so the edit form can show/edit every region's override at once.
+ * so the frontend reads the same field names regardless of region.
+ *
+ * Semantics (must match orderedVariants + admin "leave empty = no discount"):
+ * - No regional price row → keep base product price/discount.
+ * - Regional `price` set → use that price; use regional `discountedPrice` as-is
+ *   (null/empty = no discount in this region — do NOT inherit the base region's
+ *   discount, which caused Oman/OMR to show another region's sale price).
+ * - Regional `price` unset but `discountedPrice` set → keep base price, apply
+ *   only that regional discount.
+ *
+ * Relies on `mapped._regionPriceRow`, set by mapProduct from a region-scoped
+ * ProductRegion include. Staff/admin reads should NOT call this.
  */
 function applyRegionCurrency(mapped) {
   if (!mapped) return mapped;
   const override = mapped._regionPriceRow;
   const { _regionPriceRow, ...clean } = mapped;
   if (!override) return clean;
+  const hasPriceOverride = override.price != null;
   return {
     ...clean,
-    price: override.price != null ? override.price : clean.price,
-    discountedPrice: override.discountedPrice != null ? override.discountedPrice : clean.discountedPrice,
+    price: hasPriceOverride ? override.price : clean.price,
+    // When this region has its own price, empty discountedPrice means "no sale
+    // here" — never fall back to the base product's discountedPrice.
+    discountedPrice: hasPriceOverride
+      ? override.discountedPrice
+      : override.discountedPrice != null
+        ? override.discountedPrice
+        : clean.discountedPrice,
     // This region's own coming-soon (the category cascade was already folded into
     // category.comingSoon in mapProduct) — the storefront ORs the two.
     comingSoon: !!override.comingSoon,
@@ -634,6 +647,10 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
  * numeric price is needed (order totals, cart line totals), not the full product shape.
  * `row.regions` must be pre-scoped to the requesting region (0-1 row) by the caller's
  * query, e.g. `regions: { where: { regionId }, select: { price, discountedPrice } }`.
+ *
+ * When the region has its own `price`, `discountedPrice` is taken from that row only
+ * (null = no discount) — never inherited from the base product. Matches applyRegionCurrency
+ * and orderedVariants.
  */
 function regionPriceFromRow(row) {
   const price = decimalToNumber(row.price) ?? 0;
@@ -642,8 +659,11 @@ function regionPriceFromRow(row) {
   if (!override) return { price, discountedPrice };
   const overridePrice = decimalToNumber(override.price);
   const overrideDiscountedPrice = decimalToNumber(override.discountedPrice);
+  if (overridePrice != null) {
+    return { price: overridePrice, discountedPrice: overrideDiscountedPrice };
+  }
   return {
-    price: overridePrice != null ? overridePrice : price,
+    price,
     discountedPrice: overrideDiscountedPrice != null ? overrideDiscountedPrice : discountedPrice,
   };
 }
