@@ -31,6 +31,7 @@ const REGION_SELECT = {
   legalEntity: true,
   shippingFlatRate: true,
   standardDeliveryDays: true,
+  standardDeliveryDaysMax: true,
   // city-level delivery config
   timezone: true,
   freeDeliveryThreshold: true,
@@ -160,6 +161,36 @@ function parseStandardDeliveryDays(value) {
     throw Object.assign(new Error('standardDeliveryDays must be a whole number between 0 and 90'), { code: 'VALIDATION' });
   }
   return n;
+}
+
+/** Same shape as parseStandardDeliveryDays — optional upper bound for the ETA range. */
+function parseStandardDeliveryDaysMax(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 90) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax must be a whole number between 0 and 90'),
+      { code: 'VALIDATION' }
+    );
+  }
+  return n;
+}
+
+/** Max is only valid when a min is set, and must be >= min. */
+function assertDeliveryDaysRange(minDays, maxDays) {
+  if (maxDays == null) return;
+  if (minDays == null) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax requires standardDeliveryDays to be set'),
+      { code: 'VALIDATION' }
+    );
+  }
+  if (maxDays < minDays) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax must be greater than or equal to standardDeliveryDays'),
+      { code: 'VALIDATION' }
+    );
+  }
 }
 
 /** Blank/null/undefined -> null; otherwise the trimmed string. Shared by every
@@ -383,7 +414,12 @@ async function createRegion(data) {
         currency: data.currency ? String(data.currency).trim().toUpperCase() : 'AED',
         legalEntity: trimOrNull(data.legalEntity),
         shippingFlatRate: parseShippingFlatRate(data.shippingFlatRate),
-        standardDeliveryDays: parseStandardDeliveryDays(data.standardDeliveryDays),
+        ...(() => {
+          const minDays = parseStandardDeliveryDays(data.standardDeliveryDays);
+          const maxDays = parseStandardDeliveryDaysMax(data.standardDeliveryDaysMax);
+          assertDeliveryDaysRange(minDays, maxDays);
+          return { standardDeliveryDays: minDays, standardDeliveryDaysMax: maxDays };
+        })(),
         iso2: parseIso2(data.iso2),
         urlSlug: parseUrlSlug(data.urlSlug),
         contactEmail: trimOrNull(data.contactEmail),
@@ -469,6 +505,20 @@ async function updateRegion(id, data) {
   }
   if (data.standardDeliveryDays !== undefined) {
     payload.standardDeliveryDays = parseStandardDeliveryDays(data.standardDeliveryDays);
+  }
+  if (data.standardDeliveryDaysMax !== undefined) {
+    payload.standardDeliveryDaysMax = parseStandardDeliveryDaysMax(data.standardDeliveryDaysMax);
+  }
+  if (data.standardDeliveryDays !== undefined || data.standardDeliveryDaysMax !== undefined) {
+    const nextMin =
+      data.standardDeliveryDays !== undefined
+        ? payload.standardDeliveryDays
+        : existing.standardDeliveryDays;
+    const nextMax =
+      data.standardDeliveryDaysMax !== undefined
+        ? payload.standardDeliveryDaysMax
+        : existing.standardDeliveryDaysMax;
+    assertDeliveryDaysRange(nextMin ?? null, nextMax ?? null);
   }
   if (data.iso2 !== undefined) payload.iso2 = parseIso2(data.iso2);
   if (data.urlSlug !== undefined) payload.urlSlug = parseUrlSlug(data.urlSlug);

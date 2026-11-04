@@ -29,6 +29,7 @@ const ZONE_SELECT = {
   sameDayEnabled: true,
   sameDayCutoff: true,
   standardLeadDays: true,
+  standardLeadDaysMax: true,
   deliveryDays: true,
   codEnabled: true,
   minOrderAmount: true,
@@ -59,6 +60,22 @@ function buildZoneConfigPayload(data, { partial = false } = {}) {
   set('sameDayEnabled', data.sameDayEnabled !== undefined, parseNullableBool(data.sameDayEnabled));
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
   set('standardLeadDays', data.standardLeadDays !== undefined, parseWholeDaysOrNull(data.standardLeadDays, 'standardLeadDays'));
+  set('standardLeadDaysMax', data.standardLeadDaysMax !== undefined, parseWholeDaysOrNull(data.standardLeadDaysMax, 'standardLeadDaysMax'));
+  // Zone-local range check when BOTH override fields are present in this payload.
+  // Full min/max (including inherited region values) is enforced in deliveryConfig /
+  // order flows; here we only reject an obviously inverted zone pair.
+  if (
+    Object.prototype.hasOwnProperty.call(payload, 'standardLeadDays') &&
+    Object.prototype.hasOwnProperty.call(payload, 'standardLeadDaysMax') &&
+    payload.standardLeadDays != null &&
+    payload.standardLeadDaysMax != null &&
+    payload.standardLeadDaysMax < payload.standardLeadDays
+  ) {
+    throw Object.assign(
+      new Error('standardLeadDaysMax must be greater than or equal to standardLeadDays'),
+      { code: 'VALIDATION' }
+    );
+  }
   set('deliveryDays', data.deliveryDays !== undefined, parseDeliveryDays(data.deliveryDays));
   set('codEnabled', data.codEnabled !== undefined, parseNullableBool(data.codEnabled));
   const min = parseMoneyOrNull(data.minOrderAmount, 'minOrderAmount');

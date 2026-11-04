@@ -81,6 +81,16 @@ function resolveDeliveryConfig(region, zone, opts = {}) {
   const sameDayEnabled = !!inherit(z.sameDayEnabled, r.sameDayEnabled, false);
   const sameDayCutoff = inherit(z.sameDayCutoff, r.sameDayCutoff, null);
   const standardLeadDays = inherit(z.standardLeadDays, r.standardDeliveryDays, null);
+  // Upper bound of the ETA range. Inherit zone → region like the min. If a max is set
+  // but is below the resolved min (misconfigured override), drop it so the storefront
+  // falls back to the single-number "within N days" copy instead of an inverted range.
+  let standardLeadDaysMax = inherit(z.standardLeadDaysMax, r.standardDeliveryDaysMax, null);
+  if (
+    standardLeadDaysMax != null &&
+    (standardLeadDays == null || standardLeadDaysMax < standardLeadDays)
+  ) {
+    standardLeadDaysMax = null;
+  }
   const codEnabled = !!inherit(z.codEnabled, r.codEnabled, true);
   const minOrderAmount = toNum(z.minOrderAmount);
   const maxOrderAmount = toNum(z.maxOrderAmount);
@@ -126,6 +136,7 @@ function resolveDeliveryConfig(region, zone, opts = {}) {
     sameDayEnabled,
     sameDayCutoff,
     standardLeadDays,
+    standardLeadDaysMax,
     codEnabled,
     minOrderAmount,
     maxOrderAmount,

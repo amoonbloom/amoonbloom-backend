@@ -39,7 +39,13 @@ model Region {
   // days (e.g. 1 for UAE, 3 for KSA). Null means not configured — the storefront
   // shows no ETA. Snapshotted onto Order.estimatedDeliveryDays at checkout time
   // so a later change here doesn't retroactively alter historical orders.
+  // When standardDeliveryDaysMax is also set, the storefront shows a range
+  // ("around X to Y days") instead of "within X days". Scheduling still uses
+  // standardDeliveryDays as the earliest floor.
   standardDeliveryDays           Int?
+  // Optional upper bound for the region's standard delivery window (whole days).
+  // Null = single-number ETA ("within N days"). When set, must be >= standardDeliveryDays.
+  standardDeliveryDaysMax        Int?
   // IANA timezone the region operates in (e.g. "Asia/Dubai", "Asia/Riyadh"). Drives ALL
   // delivery day-boundary math: same-day cutoff, "today", allowed weekdays, blackout
   // dates. Must not be null — every region has a local clock; defaults to Asia/Dubai so
@@ -270,7 +276,11 @@ model DeliveryZone {
   sameDayCutoff                   String?
   // Standard courier lead time (whole days) for this zone. null = inherit
   // Region.standardDeliveryDays. Distinct from product/category PREP lead days.
+  // When standardLeadDaysMax is also set (or inherited), the storefront shows a range.
   standardLeadDays                Int?
+  // Optional upper bound for this zone's standard delivery window. null = inherit
+  // Region.standardDeliveryDaysMax. When set with a min, must be >= the effective min.
+  standardLeadDaysMax             Int?
   // Allowed delivery weekdays (0=Sun..6=Sat). [] = inherit the region's deliveryDays.
   deliveryDays                    Int[]    @default([])
   // COD offered in this zone? null = inherit Region.codEnabled (effective default yes).
