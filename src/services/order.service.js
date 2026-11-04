@@ -1742,6 +1742,11 @@ async function createExpressOrder(userId, expressInput = {}, opts = {}) {
   if (!area && trimOrNullStr(shortAddress)) {
     area = trimOrNullStr(rawAddress.city) || 'Express';
   }
+  // Final fallback so validateShippingAddress never blocks a valid express contact
+  // (name + phone + optional national address) when the client omitted area/zone.
+  if (!area) {
+    area = trimOrNullStr(rawAddress.city) || 'Express';
+  }
 
   const shippingAddress = {
     ...rawAddress,
