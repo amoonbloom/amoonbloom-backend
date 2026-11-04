@@ -71,6 +71,29 @@ async function createExpressOrder(req, res, next) {
   }
 }
 
+// PATCH /orders/:id/express-contact — overwrite shipping/guest contact from Apple Pay Wallet
+// after Face ID (optionalAuth). PENDING_PAYMENT + UNPAID Moyasar orders only.
+async function updateExpressContact(req, res, next) {
+  try {
+    const { order, error: errMsg } = await orderService.updateExpressContact(
+      req.params.id,
+      req.userId ?? null,
+      {
+        fullName: req.body?.fullName,
+        phone: req.body?.phone,
+        email: req.body?.email,
+      }
+    );
+    if (errMsg) {
+      const status = errMsg === 'Order not found' ? 404 : 400;
+      return error(res, errMsg, status);
+    }
+    return success(res, order, 'Contact updated');
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /orders/buy-now — order a single product directly (Apple Pay / COD) without using the cart.
 async function buyNow(req, res, next) {
   try {
@@ -767,6 +790,7 @@ module.exports = {
   createOrder,
   createGuestOrder,
   createExpressOrder,
+  updateExpressContact,
   buyNow,
   quote,
   getOrderById,

@@ -1797,6 +1797,84 @@ async function createExpressOrder(userId, expressInput = {}, opts = {}) {
 }
 
 /**
+ * Update shipping/guest contact on a PENDING_PAYMENT + UNPAID express (MOYASAR) order
+ * after Apple Pay Wallet shares shippingContact. Called mid-sheet before creating the
+ * Moyasar payment so the receipt / notifications use the real Wallet name/phone/email.
+ *
+ * Auth: optionalAuth. Owned orders require a matching JWT; guest orders (userId null)
+ * allow unauthenticated updates (order id is the secret, same as guest-pay).
+ *
+ * @returns {{ order } | { error: string }}
+ */
+async function updateExpressContact(orderId, userId, contact = {}) {
+  const fullName = trimOrNullStr(contact.fullName);
+  const phone = trimOrNullStr(contact.phone);
+  if (!fullName) return { error: 'Full name is required' };
+  if (!phone) return { error: 'Phone number is required' };
+
+  const emailRaw = contact.email != null ? String(contact.email).trim() : '';
+  const emailNorm = emailRaw ? emailRaw.toLowerCase() : null;
+
+  const order = await prisma.order.findUnique({
+    where: { id: String(orderId) },
+    select: {
+      id: true,
+      userId: true,
+      status: true,
+      paymentStatus: true,
+      paymentMethod: true,
+      orderNumber: true,
+      totalAmount: true,
+      currency: true,
+    },
+  });
+  if (!order) return { error: 'Order not found' };
+
+  // Owned order → JWT must match; guest → id alone is enough (guest-pay parity).
+  if (order.userId) {
+    if (!userId || String(userId) !== String(order.userId)) {
+      return { error: 'Order not found' };
+    }
+  }
+
+  if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be updated' };
+  if (order.paymentStatus !== 'UNPAID') return { error: 'Order is already paid' };
+  if (order.paymentMethod !== 'MOYASAR') {
+    return { error: 'Contact update is only allowed for Moyasar express orders' };
+  }
+
+  const data = {
+    shippingFullName: fullName,
+    shippingPhone: phone,
+  };
+  if (!order.userId) {
+    data.guestName = fullName;
+    data.guestPhone = phone;
+    if (emailNorm) data.guestEmail = emailNorm;
+  }
+
+  const updated = await prisma.order.update({
+    where: { id: order.id },
+    data,
+    select: {
+      id: true,
+      orderNumber: true,
+      totalAmount: true,
+      currency: true,
+      status: true,
+      paymentStatus: true,
+      shippingFullName: true,
+      shippingPhone: true,
+      guestName: true,
+      guestPhone: true,
+      guestEmail: true,
+    },
+  });
+
+  return { order: updated };
+}
+
+/**
  * Back-link guest orders to a user account by matching guestEmail. Called after
  * signup / signin / OAuth so a customer who checked out as a guest (with the same
  * email) sees those orders in their history. Idempotent — only touches orders
@@ -3264,6 +3342,7 @@ module.exports = {
   createOrder,
   createGuestOrder,
   createExpressOrder,
+  updateExpressContact,
   linkGuestOrdersToUser,
   buyNow,
   quoteOrder,

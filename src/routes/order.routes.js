@@ -422,6 +422,51 @@ router.post(
 
 /**
  * @swagger
+ * /orders/{id}/express-contact:
+ *   patch:
+ *     summary: Update express-order contact from Apple Pay Wallet
+ *     description: |
+ *       Overwrites shipping (and guest) name/phone/email on a PENDING_PAYMENT + UNPAID
+ *       Moyasar order after Apple Pay shares `shippingContact`. optionalAuth: owned
+ *       orders require a matching JWT; guest orders (userId null) allow unauthenticated
+ *       updates (order id is the credential, same as guest-pay).
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [fullName, phone]
+ *             properties:
+ *               fullName: { type: string }
+ *               phone: { type: string }
+ *               email: { type: string }
+ *     responses:
+ *       200: { description: Contact updated }
+ *       400: { description: Validation / order state error }
+ *       404: { description: Order not found }
+ */
+router.patch(
+  '/:id/express-contact',
+  optionalAuth,
+  authLimiter,
+  idParam,
+  body('fullName').trim().notEmpty().withMessage('Full name is required'),
+  body('phone').trim().notEmpty().withMessage('Phone number is required'),
+  body('email').optional({ nullable: true, checkFalsy: true }).trim().isEmail().withMessage('A valid email is required'),
+  handleValidationErrors,
+  orderController.updateExpressContact
+);
+
+/**
+ * @swagger
  * /orders/buy-now:
  *   post:
  *     summary: Buy a single product directly (Buy Now — does NOT use the cart)
