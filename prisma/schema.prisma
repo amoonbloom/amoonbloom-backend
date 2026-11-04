@@ -60,13 +60,17 @@ model Region {
   // Whether Cash on Delivery is offered in this region. Default true (COD is the only
   // payment method today). Zones may override to disable COD for a specific area.
   codEnabled                     Boolean  @default(true)
-  // Whether online (card / Apple Pay via MyFatoorah) payment is offered in this region.
+  // Whether online (card / Apple Pay) payment is offered in this region.
   // Opt-in per region (default false): the gateway account is currency-scoped (e.g. an
   // AED-only Apple Pay certificate), so only regions whose currency the gateway can charge
-  // should be turned on. When false, checkout/buy-now reject MYFATOORAH and the storefront
-  // hides the online option — Cash on Delivery still works. Replaces the old global
-  // "order currency must equal the gateway currency" gate.
+  // should be turned on. When false, checkout/buy-now reject card online methods and the
+  // storefront hides the online option — Cash on Delivery still works. Replaces the old
+  // global "order currency must equal the gateway currency" gate.
   onlinePaymentEnabled           Boolean  @default(false)
+  // Which card gateway processes online payments when onlinePaymentEnabled is on.
+  // MYFATOORAH = existing hosted page (UAE/default); MOYASAR = KSA mada/Apple Pay via
+  // Moyasar invoices. Admin picks per region — checkout remaps the card method accordingly.
+  onlinePaymentProvider          OnlinePaymentProvider @default(MYFATOORAH)
   // Which online methods are offered when onlinePaymentEnabled is on — set independently
   // per region from the admin panel. Default true so turning online payment on offers both
   // (existing enabled regions keep card + Apple Pay). Apple Pay is enforced server-side on
@@ -1838,6 +1842,12 @@ enum DeliveryType {
 enum PaymentMethod {
   COD
   MYFATOORAH
+  MOYASAR
+}
+
+enum OnlinePaymentProvider {
+  MYFATOORAH
+  MOYASAR
 }
 
 enum PaymentStatus {

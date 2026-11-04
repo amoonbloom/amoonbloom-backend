@@ -167,8 +167,8 @@ const checkoutBody = [
   body('addressId').optional().isUUID().withMessage('addressId must be a valid UUID'),
   body('paymentMethod')
     .optional()
-    .isIn(['COD', 'MYFATOORAH'])
-    .withMessage('paymentMethod must be COD or MYFATOORAH'),
+    .isIn(['COD', 'MYFATOORAH', 'MOYASAR'])
+    .withMessage('paymentMethod must be COD, MYFATOORAH, or MOYASAR'),
   body('promoCode').optional().trim().isLength({ max: 50 }).withMessage('promoCode too long'),
   body('deliveryType').optional().isIn(['STANDARD', 'SCHEDULED']).withMessage('deliveryType must be STANDARD or SCHEDULED'),
   body('scheduledDeliveryAt').optional({ nullable: true }).isISO8601().withMessage('scheduledDeliveryAt must be a valid ISO date'),
@@ -332,6 +332,10 @@ const guestCheckoutBody = [
   body('shippingAddress.country').optional({ nullable: true }).trim(),
   body('shippingAddress.area').trim().notEmpty().withMessage('Area is required'),
   body('shippingAddress.deliveryZoneId').optional({ checkFalsy: true }).isUUID().withMessage('deliveryZoneId must be a valid id'),
+  body('paymentMethod')
+    .optional()
+    .isIn(['COD', 'MYFATOORAH', 'MOYASAR'])
+    .withMessage('paymentMethod must be COD, MYFATOORAH, or MOYASAR'),
   // Format-only here; the service enforces required-ness per region (Region.shortAddressEnabled).
   shortAddressOptional,
 ];
@@ -383,7 +387,7 @@ router.post(
 const buyNowBody = [
   body('productId').isUUID().withMessage('Valid productId is required'),
   body('quantity').optional().isInt({ min: 1 }).withMessage('quantity must be a positive integer'),
-  body('paymentMethod').optional().isIn(['COD', 'MYFATOORAH']).withMessage('paymentMethod must be COD or MYFATOORAH'),
+  body('paymentMethod').optional().isIn(['COD', 'MYFATOORAH', 'MOYASAR']).withMessage('paymentMethod must be COD, MYFATOORAH, or MOYASAR'),
   body('addressId').optional().isUUID().withMessage('addressId must be a valid UUID'),
   body('shippingAddress').optional().isObject().withMessage('shippingAddress must be an object'),
   body('promoCode').optional().trim().isLength({ max: 50 }).withMessage('promoCode too long'),
@@ -475,6 +479,34 @@ router.post(
   idParam,
   handleValidationErrors,
   orderController.initiateGuestPayment
+);
+
+/**
+ * POST /orders/:id/moyasar/attach — embedded form on_completed (authenticated).
+ * Body: { paymentId }. Stores the Moyasar payment id for reconcile/webhook.
+ */
+router.post(
+  '/:id/moyasar/attach',
+  verifyToken,
+  authLimiter,
+  idParam,
+  body('paymentId').optional().isString(),
+  body('id').optional().isString(),
+  handleValidationErrors,
+  orderController.attachMoyasarPayment
+);
+
+/**
+ * POST /orders/:id/moyasar/guest-attach — embedded form on_completed for guest orders.
+ */
+router.post(
+  '/:id/moyasar/guest-attach',
+  authLimiter,
+  idParam,
+  body('paymentId').optional().isString(),
+  body('id').optional().isString(),
+  handleValidationErrors,
+  orderController.attachMoyasarGuestPayment
 );
 
 /**
@@ -599,6 +631,50 @@ router.get('/payment/error', orderController.paymentError);
  *         description: Signature verification failed (only when a webhook secret is set)
  */
 router.post('/payment/webhook', orderController.paymentWebhook);
+
+/**
+ * @swagger
+ * /orders/payment/moyasar/callback:
+ *   get:
+ *     summary: Moyasar invoice success/back return URL
+ *     description: |
+ *       Browser return after Moyasar hosted invoice. Re-verifies via Moyasar GET invoice/payment,
+ *       then redirects to the storefront success/error page (`ret` query).
+ *     tags: [Orders]
+ */
+router.get('/payment/moyasar/callback', orderController.moyasarCallback);
+
+/**
+ * GET /orders/payment/moyasar/form-config — publishable key + CDN for embedded checkout form.
+ */
+router.get('/payment/moyasar/form-config', authLimiter, orderController.moyasarFormConfig);
+
+/**
+ * POST /orders/payment/moyasar/confirm — storefront return page (JSON).
+ * Body: { paymentId, orderId? }. Re-verifies then marks paid / failed.
+ */
+router.post(
+  '/payment/moyasar/confirm',
+  authLimiter,
+  body('paymentId').optional().isString(),
+  body('id').optional().isString(),
+  body('orderId').optional().isString(),
+  body('oid').optional().isString(),
+  handleValidationErrors,
+  orderController.moyasarConfirmApi
+);
+
+/**
+ * @swagger
+ * /orders/payment/moyasar/webhook:
+ *   post:
+ *     summary: Moyasar webhook (server-to-server payment notification)
+ *     description: |
+ *       Reliable async confirmation. Register in Moyasar dashboard (or POST /v1/webhooks)
+ *       with shared_secret = MOYASAR_WEBHOOK_SECRET. Events: payment_paid, payment_failed.
+ *     tags: [Orders]
+ */
+router.post('/payment/moyasar/webhook', orderController.moyasarWebhook);
 
 /**
  * @swagger

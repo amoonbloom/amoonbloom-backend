@@ -39,6 +39,7 @@ const REGION_SELECT = {
   sameDayCutoff: true,
   codEnabled: true,
   onlinePaymentEnabled: true,
+  onlinePaymentProvider: true,
   applePayEnabled: true,
   cardPaymentEnabled: true,
   shortAddressEnabled: true,
@@ -108,6 +109,11 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
   set('codEnabled', data.codEnabled != null, parseBool(data.codEnabled, true));
   set('onlinePaymentEnabled', data.onlinePaymentEnabled != null, parseBool(data.onlinePaymentEnabled, false));
+  set(
+    'onlinePaymentProvider',
+    data.onlinePaymentProvider != null && data.onlinePaymentProvider !== '',
+    parseOnlinePaymentProvider(data.onlinePaymentProvider)
+  );
   // applePayEnabled/cardPaymentEnabled are non-nullable columns defaulting to true; on a
   // partial update a stray null means "leave unchanged" (gate on != null), matching the
   // codEnabled/sameDayEnabled convention above.
@@ -121,6 +127,18 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
 
 function normalizeCode(code) {
   return String(code ?? '').trim().toUpperCase();
+}
+
+/** Card gateway for the region — MyFatoorah (default) or Moyasar (KSA). */
+function parseOnlinePaymentProvider(value) {
+  const v = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (v === 'MOYASAR') return 'MOYASAR';
+  if (v === 'MYFATOORAH' || v === '') return 'MYFATOORAH';
+  throw Object.assign(new Error('onlinePaymentProvider must be MYFATOORAH or MOYASAR'), {
+    code: 'VALIDATION',
+  });
 }
 
 /** Blank/null/undefined -> null (no fee configured); otherwise a non-negative number. */

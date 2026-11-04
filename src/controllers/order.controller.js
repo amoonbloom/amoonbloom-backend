@@ -1,5 +1,7 @@
+const prisma = require('../config/db');
 const orderService = require('../services/order.service');
 const paymentService = require('../services/payment.service');
+const moyasarService = require('../services/moyasar.service');
 const regionService = require('../services/region.service');
 const { getOrdersForExport } = require('../services/export/orderExport.service');
 const { renderOrdersExcel } = require('../services/export/orderExcel.service');
@@ -325,10 +327,10 @@ function safeStorefrontUrl(urlStr) {
   return allowedStorefrontOrigins().has(u.origin) ? urlStr : null;
 }
 
-// POST /orders/:id/pay — start an online (MyFatoorah) payment for the user's order.
-// Returns the hosted payment URL to open (Apple Pay / cards). The web checkout also sends a
-// `returnUrl` (its order-success page) so, after paying, the browser is sent back to the
-// website instead of a bare backend page. Mobile sends none and keeps its in-app behavior.
+// POST /orders/:id/pay — start an online payment for the user's order.
+// MyFatoorah: returns a hosted payment URL. Moyasar: returns embedded form config.
+// The web checkout also sends a `returnUrl` (its order-success page) so, after paying,
+// the browser is sent back to the website instead of a bare backend page.
 async function initiatePayment(req, res, next) {
   try {
     const { id } = req.params;
@@ -339,7 +341,17 @@ async function initiatePayment(req, res, next) {
       const status = result.error === 'Order not found' ? 404 : 400;
       return error(res, result.error, status);
     }
-    return success(res, { paymentUrl: result.paymentUrl, invoiceId: result.invoiceId }, 'Payment created');
+    return success(
+      res,
+      {
+        mode: result.mode || 'redirect',
+        paymentUrl: result.paymentUrl || null,
+        invoiceId: result.invoiceId || null,
+        form: result.form || null,
+        orderId: result.orderId || id,
+      },
+      'Payment created'
+    );
   } catch (err) {
     if (err.code === 'PAYMENT_NOT_CONFIGURED') return error(res, 'Online payment is not enabled', 503);
     if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
@@ -360,9 +372,108 @@ async function initiateGuestPayment(req, res, next) {
       const status = result.error === 'Order not found' ? 404 : 400;
       return error(res, result.error, status);
     }
-    return success(res, { paymentUrl: result.paymentUrl, invoiceId: result.invoiceId }, 'Payment created');
+    return success(
+      res,
+      {
+        mode: result.mode || 'redirect',
+        paymentUrl: result.paymentUrl || null,
+        invoiceId: result.invoiceId || null,
+        form: result.form || null,
+        orderId: result.orderId || id,
+      },
+      'Payment created'
+    );
   } catch (err) {
     if (err.code === 'PAYMENT_NOT_CONFIGURED') return error(res, 'Online payment is not enabled', 503);
+    if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
+    next(err);
+  }
+}
+
+/**
+ * POST /orders/:id/moyasar/attach — save Moyasar payment id from embedded form on_completed.
+ * Auth required (order owner).
+ */
+async function attachMoyasarPayment(req, res, next) {
+  try {
+    const paymentId = req.body?.paymentId || req.body?.id || null;
+    const result = await orderService.attachMoyasarPayment(req.params.id, req.userId, paymentId);
+    if (result.error) {
+      const status = result.error === 'Order not found' ? 404 : 400;
+      return error(res, result.error, status);
+    }
+    return success(res, result, 'Payment attached');
+  } catch (err) {
+    if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
+    next(err);
+  }
+}
+
+/**
+ * POST /orders/:id/moyasar/guest-attach — same as attach for guest orders (userId IS NULL).
+ */
+async function attachMoyasarGuestPayment(req, res, next) {
+  try {
+    const paymentId = req.body?.paymentId || req.body?.id || null;
+    const result = await orderService.attachMoyasarPayment(req.params.id, null, paymentId);
+    if (result.error) {
+      const status = result.error === 'Order not found' ? 404 : 400;
+      return error(res, result.error, status);
+    }
+    return success(res, result, 'Payment attached');
+  } catch (err) {
+    if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
+    next(err);
+  }
+}
+
+/**
+ * GET /orders/payment/moyasar/form-config — public bootstrap for the embedded checkout form.
+ * Returns publishable key + CDN URLs only (never the secret key).
+ */
+async function moyasarFormConfig(req, res, next) {
+  try {
+    if (!moyasarService.isConfigured()) {
+      return error(res, 'Online payment is not enabled', 503);
+    }
+    const c = moyasarService.config();
+    return success(
+      res,
+      {
+        publishableApiKey: c.publishableKey,
+        scriptUrl: 'https://cdn.moyasar.com/mpf/1.15.0/moyasar.js',
+        cssUrl: 'https://cdn.moyasar.com/mpf/1.15.0/moyasar.css',
+        supportedNetworks: ['mada', 'visa', 'mastercard', 'amex'],
+        applePay: {
+          country: 'SA',
+          label: c.applePayLabel,
+          validateMerchantUrl: `${c.baseUrl}/v1/applepay/initiate`,
+        },
+      },
+      'Moyasar form config'
+    );
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /orders/payment/moyasar/confirm — JSON confirm for the storefront return page.
+ * Body: { paymentId, orderId? }. Always re-verifies with Moyasar before marking paid.
+ */
+async function moyasarConfirmApi(req, res, next) {
+  try {
+    const paymentId = req.body?.paymentId || req.body?.id || null;
+    const orderHint = req.body?.orderId || req.body?.oid || null;
+    if (!paymentId && !orderHint) {
+      return error(res, 'paymentId or orderId is required', 400);
+    }
+    const result = await orderService.confirmMoyasarPayment({
+      paymentId: paymentId ? String(paymentId) : null,
+      orderHint: orderHint ? String(orderHint) : null,
+    });
+    return success(res, result, result.isPaid ? 'Payment confirmed' : 'Payment not paid');
+  } catch (err) {
     if (err.code === 'PAYMENT_GATEWAY_ERROR') return error(res, err.message, 502);
     next(err);
   }
@@ -511,6 +622,116 @@ async function paymentWebhook(req, res) {
   }
 }
 
+// ── Moyasar return + webhook ──────────────────────────────────────────────────
+
+/**
+ * GET /orders/payment/moyasar/callback — browser return after Moyasar invoice pay.
+ * Query: oid (order id), id (payment id — sometimes appended), unpaid=1 (back button),
+ * ret (storefront success URL). Always re-verifies via Moyasar API.
+ */
+async function moyasarCallback(req, res) {
+  const orderHint = req.query.oid ? String(req.query.oid) : null;
+  const paymentId =
+    req.query.id || req.query.payment_id || req.query.paymentId || null;
+  const unpaid = req.query.unpaid === '1' || req.query.unpaid === 'true';
+  const returnBase = safeStorefrontUrl(req.query.ret);
+  const failUrl = returnBase ? returnBase.replace('/order/success', '/order/error') : null;
+
+  // Back button on Moyasar invoice — no need to hit the API if we already know unpaid.
+  if (unpaid && !paymentId) {
+    if (failUrl) return res.redirect(302, failUrl);
+    return res.status(200).type('html').send(paymentResultPage(false, orderHint));
+  }
+
+  try {
+    let invoiceId = null;
+    if (orderHint) {
+      const row = await prisma.order.findUnique({
+        where: { id: orderHint },
+        select: { paymentInvoiceId: true, paymentMethod: true },
+      });
+      if (row?.paymentMethod === 'MOYASAR') invoiceId = row.paymentInvoiceId;
+    }
+
+    const result = await orderService.confirmMoyasarPayment({
+      invoiceId,
+      paymentId: paymentId ? String(paymentId) : null,
+      orderHint,
+    });
+
+    if (returnBase) {
+      if (result.isPaid) {
+        const target = `${returnBase}${returnBase.includes('?') ? '&' : '?'}id=${encodeURIComponent(result.orderId || orderHint || '')}`;
+        return res.redirect(302, target);
+      }
+      return res.redirect(302, failUrl);
+    }
+    return res
+      .status(200)
+      .type('html')
+      .send(paymentResultPage(result.isPaid, result.orderId || orderHint));
+  } catch (err) {
+    console.error('[moyasar] return handler error:', err.message);
+    if (failUrl) return res.redirect(302, failUrl);
+    return res.status(200).type('html').send(paymentResultPage(false, orderHint));
+  }
+}
+
+/**
+ * POST /orders/payment/moyasar/webhook — Moyasar server-to-server event.
+ * Body includes type (payment_paid / payment_failed / …), secret_token, data (payment).
+ * Always re-fetch payment/invoice before marking paid.
+ */
+async function moyasarWebhook(req, res) {
+  try {
+    const body = req.body || {};
+    if (!moyasarService.verifyWebhookSecret(body)) {
+      console.warn('[moyasar] webhook secret_token check failed');
+      return res.status(401).json({ received: false });
+    }
+
+    const type = String(body.type || '').toLowerCase();
+    const data = body.data || {};
+    const paymentId = data.id != null ? String(data.id) : null;
+    const invoiceId = data.invoice_id != null ? String(data.invoice_id) : null;
+
+    if (!paymentId && !invoiceId) {
+      console.warn('[moyasar] webhook missing payment/invoice id');
+      return res.status(200).json({ received: true });
+    }
+
+    // Settle on paid; also process failed so we stop reconcile polling.
+    if (
+      type === 'payment_paid' ||
+      type === 'payment_failed' ||
+      type === 'payment_faild' ||
+      type === 'payment_voided' ||
+      type === 'payment_refunded' ||
+      !type
+    ) {
+      try {
+        const result = await orderService.confirmMoyasarPayment({
+          paymentId,
+          invoiceId,
+        });
+        if (result.reason === 'Order not found') {
+          // Race with checkout commit — ask Moyasar to retry.
+          return res.status(404).json({ received: false, reason: 'order_not_found' });
+        }
+      } catch (confirmErr) {
+        // Don't 500 the webhook forever on a bad/expired id — log and ack so Moyasar stops retrying.
+        console.error('[moyasar] webhook confirm error:', confirmErr.message);
+        return res.status(200).json({ received: true, warning: 'confirm_failed' });
+      }
+    }
+
+    return res.status(200).json({ received: true });
+  } catch (err) {
+    console.error('[moyasar] webhook error:', err.message);
+    return res.status(500).json({ received: false });
+  }
+}
+
 // POST /orders/quote — price a cart WITHOUT creating an order (totals preview: item subtotal +
 // promo discount + zone-accurate delivery + VAT). optionalAuth: works for signed-in users
 // (falls back to their server cart when `items` is omitted) and guests. Lets the bag/checkout
@@ -547,4 +768,10 @@ module.exports = {
   paymentCallback,
   paymentError,
   paymentWebhook,
+  moyasarCallback,
+  moyasarWebhook,
+  attachMoyasarPayment,
+  attachMoyasarGuestPayment,
+  moyasarFormConfig,
+  moyasarConfirmApi,
 };

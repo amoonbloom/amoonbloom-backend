@@ -68,6 +68,9 @@ const deliveryConfigValidation = [
     .withMessage('sameDayCutoff must be a 24h time "HH:mm"'),
   body('codEnabled').optional({ nullable: true }).isBoolean(),
   body('onlinePaymentEnabled').optional({ nullable: true }).isBoolean(),
+  body('onlinePaymentProvider')
+    .optional({ nullable: true })
+    .isIn(['MYFATOORAH', 'MOYASAR']),
   body('applePayEnabled').optional({ nullable: true }).isBoolean(),
   body('cardPaymentEnabled').optional({ nullable: true }).isBoolean(),
   body('shortAddressEnabled').optional({ nullable: true }).isBoolean()

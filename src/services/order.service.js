@@ -4,6 +4,7 @@ const cartService = require('../services/cart.service');
 const notify = require('../notifications/notify');
 const promoCodeService = require('../services/promoCode.service');
 const paymentService = require('../services/payment.service');
+const moyasarService = require('../services/moyasar.service');
 const regionService = require('../services/region.service');
 const deliveryZoneService = require('../services/deliveryZone.service');
 const productService = require('../services/product.service');
@@ -201,7 +202,7 @@ function toOrderResponsePayload(order) {
   };
 }
 
-const VALID_PAYMENT_METHODS = ['COD', 'MYFATOORAH'];
+const VALID_PAYMENT_METHODS = ['COD', 'MYFATOORAH', 'MOYASAR'];
 
 const VALID_DELIVERY_TYPES = ['STANDARD', 'SCHEDULED'];
 // How far ahead a customer may book a scheduled delivery (keeps the picker/admin list
@@ -329,7 +330,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     // SAVED address or typed a new one — a saved address predating this field would
     // otherwise leave the order without a code.
     shortAddress = null,
-    paymentMethod = 'COD',
+    paymentMethod: paymentMethodInput = 'COD',
     promoCode,
     clearCart = true,
     // STANDARD (default) or SCHEDULED — see VALID_DELIVERY_TYPES.
@@ -353,6 +354,9 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   if (!Array.isArray(lineItems) || lineItems.length === 0) {
     return { order: null, error: 'No items to order' };
   }
+
+  // Mutable so we can align MYFATOORAH ↔ MOYASAR with Region.onlinePaymentProvider.
+  let paymentMethod = paymentMethodInput;
 
   if (!VALID_PAYMENT_METHODS.includes(paymentMethod)) {
     return { order: null, error: `Invalid paymentMethod. Supported: ${VALID_PAYMENT_METHODS.join(', ')}` };
@@ -410,9 +414,12 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // Every order — online or COD — is placed immediately as a real, visible
   // PENDING_PAYMENT order (WooCommerce parity: "Pending payment" is a normal order
   // list entry, not a hidden state). Online payment: the cart is kept and no "order
-  // placed" push fires yet — confirmOrderPayment/finalizePaidOrder moves it to
-  // PROCESSING once paid. COD: cart cleared, push sent immediately (unchanged).
-  const isOnlinePayment = paymentMethod === 'MYFATOORAH';
+  // placed" push fires yet — confirm*/finalizePaidOrder moves it to PROCESSING once
+  // paid. COD: cart cleared, push sent immediately (unchanged).
+  const isOnlinePayment =
+    paymentMethod === 'MYFATOORAH' || paymentMethod === 'MOYASAR';
+  let isMyFatoorah = paymentMethod === 'MYFATOORAH';
+  let isMoyasar = paymentMethod === 'MOYASAR';
   const initialStatus = 'PENDING_PAYMENT';
 
   // Recipient identity (fullName + phone) is sourced from the user profile so the
@@ -459,16 +466,28 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // the unified resolveDeliveryLeadDays chain (product/category override → zone/region
   // standard → default), and the order takes the slowest line — see below.
 
-  // Online payment is offered per region via Region.onlinePaymentEnabled (admin toggle).
-  // The gateway account is currency-scoped (e.g. an AED-only Apple Pay certificate), so a
-  // region is only turned on once its currency is confirmed chargeable — the invoice below
-  // charges the order's own currency (orderCurrency), not a fixed global one. When the
-  // region is off, MYFATOORAH is rejected here and the storefront hides the online option;
-  // Cash on Delivery still works.
-  if (isOnlinePayment && !orderRegion?.onlinePaymentEnabled) {
+  // Card/Apple Pay gateway is chosen per region (MyFatoorah vs Moyasar). Align the
+  // stored paymentMethod with Region.onlinePaymentProvider so checkout can send either
+  // label and admin control still wins.
+  if (isOnlinePayment) {
+    const provider = orderRegion?.onlinePaymentProvider === 'MOYASAR' ? 'MOYASAR' : 'MYFATOORAH';
+    paymentMethod = provider;
+    isMyFatoorah = provider === 'MYFATOORAH';
+    isMoyasar = provider === 'MOYASAR';
+  }
+
+  // Card online payment is offered per region via Region.onlinePaymentEnabled.
+  // When off, MYFATOORAH/MOYASAR are rejected; Cash on Delivery still works.
+  if ((isMyFatoorah || isMoyasar) && !orderRegion?.onlinePaymentEnabled) {
     return {
       order: null,
       error: 'Online payment isn’t available for this region yet — please choose Cash on Delivery.',
+    };
+  }
+  if (isMoyasar && !moyasarService.isConfigured()) {
+    return {
+      order: null,
+      error: 'Online payment is temporarily unavailable — please choose another payment method.',
     };
   }
 
@@ -2284,14 +2303,13 @@ async function updateOrderStatus(orderId, status, { allowedRegionIds = null } = 
 }
 
 /**
- * Start an online payment for an existing order. Loads the order, asks MyFatoorah
- * to create a payment, stores the InvoiceId on the order, and returns the hosted
- * payment URL for the app to open. Caller must own the order.
+ * Start an online payment for an existing order. MyFatoorah returns a hosted payment
+ * URL; Moyasar returns embedded form config (customer stays on the storefront).
+ * Caller must own the order (or null userId for guest).
  *
- * Returns { error } on a guard failure (wrong owner / state / method), otherwise
- * { paymentUrl, invoiceId }.
+ * Returns { error } on a guard failure, otherwise { mode, paymentUrl, invoiceId, form, orderId }.
  */
-async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) {
+async function initiateOrderPayment(orderId, userId, { returnUrl = null, lang = 'en' } = {}) {
   const order = await prisma.order.findFirst({
     where: { id: orderId, userId },
     select: {
@@ -2301,24 +2319,82 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
       status: true,
       paymentStatus: true,
       paymentMethod: true,
+      paymentInvoiceId: true,
       shippingFullName: true,
       shippingPhone: true,
       guestEmail: true,
       user: { select: { email: true } },
-      // region.code selects the gateway profile; cardPaymentEnabled gates the hosted
-      // page (which is the card entry point for the /pay flow).
-      region: { select: { code: true, cardPaymentEnabled: true } },
+      // region.code selects the MyFatoorah gateway profile; card/Apple Pay flags gate methods.
+      region: {
+        select: {
+          code: true,
+          cardPaymentEnabled: true,
+          applePayEnabled: true,
+          onlinePaymentEnabled: true,
+          onlinePaymentProvider: true,
+        },
+      },
     },
   });
 
   if (!order) return { error: 'Order not found' };
-  if (order.paymentMethod !== 'MYFATOORAH') {
+  if (order.paymentMethod !== 'MYFATOORAH' && order.paymentMethod !== 'MOYASAR') {
     return { error: 'This order is not set up for online payment' };
   }
   if (order.paymentStatus === 'PAID') return { error: 'Order is already paid' };
   // Payable only while awaiting payment (covers first attempt and retry after a failed one).
   if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
   if (Number(order.totalAmount) <= 0) return { error: 'Order total must be greater than zero' };
+
+  const customer = {
+    name: order.shippingFullName,
+    phone: order.shippingPhone,
+    email: order.user?.email || order.guestEmail,
+  };
+
+  // ── Moyasar (embedded form on our storefront — customer does not leave the site) ─
+  if (order.paymentMethod === 'MOYASAR') {
+    if (order.region && order.region.onlinePaymentEnabled === false) {
+      return { error: 'Online payment isn’t available for this region.' };
+    }
+    if (
+      order.region &&
+      order.region.cardPaymentEnabled === false &&
+      order.region.applePayEnabled === false
+    ) {
+      return { error: 'Card / Apple Pay isn’t available for this region.' };
+    }
+    if (!moyasarService.isConfigured()) {
+      return { error: 'Online payment is temporarily unavailable.' };
+    }
+    // Embedded form callback must be a storefront URL we control (validated by caller).
+    if (!returnUrl) {
+      return { error: 'A return URL is required to start Moyasar payment.' };
+    }
+
+    const form = moyasarService.buildEmbeddedFormConfig(order, {
+      callbackUrl: returnUrl,
+      lang: lang === 'ar' ? 'ar' : 'en',
+      applePayEnabled: order.region?.applePayEnabled !== false,
+      cardPaymentEnabled: order.region?.cardPaymentEnabled !== false,
+    });
+
+    // Keep UNPAID; payment id is attached via on_completed / webhook once Moyasar creates it.
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { paymentStatus: 'UNPAID' },
+    });
+
+    return {
+      mode: 'embedded',
+      form,
+      orderId: order.id,
+      paymentUrl: null,
+      invoiceId: order.paymentInvoiceId || null,
+    };
+  }
+
+  // ── MyFatoorah (card / Apple Pay hosted page) ───────────────────────────────
   // The hosted page is where cards are entered, so it requires card payment to be enabled
   // for the region. (Apple Pay has its own session endpoints gated by applePayEnabled.)
   if (order.region && order.region.cardPaymentEnabled === false) {
@@ -2327,7 +2403,7 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
 
   const { invoiceId, paymentUrl } = await paymentService.createPaymentInvoice(
     order,
-    { name: order.shippingFullName, phone: order.shippingPhone, email: order.user?.email || order.guestEmail },
+    customer,
     { regionCode: order.region?.code || null, returnUrl }
   );
 
@@ -2338,7 +2414,7 @@ async function initiateOrderPayment(orderId, userId, { returnUrl = null } = {}) 
     data: { paymentInvoiceId: invoiceId, paymentStatus: 'UNPAID' },
   });
 
-  return { paymentUrl, invoiceId };
+  return { mode: 'redirect', paymentUrl, invoiceId, form: null, orderId: order.id };
 }
 
 /**
@@ -2863,6 +2939,210 @@ async function quoteOrder(userId, input = {}, opts = {}) {
   };
 }
 
+/**
+ * Persist a Moyasar payment id created by the embedded form (`on_completed`) so reconcile
+ * / webhook can find the order if the browser never returns. Verifies the payment belongs
+ * to this order (metadata.order_id + amount) before writing.
+ */
+async function attachMoyasarPayment(orderId, userId, paymentId) {
+  if (!paymentId) return { error: 'paymentId is required' };
+
+  const order = await prisma.order.findFirst({
+    where: {
+      id: String(orderId),
+      ...(userId == null ? { userId: null } : { userId: String(userId) }),
+    },
+    select: {
+      id: true,
+      totalAmount: true,
+      currency: true,
+      status: true,
+      paymentStatus: true,
+      paymentMethod: true,
+      paymentInvoiceId: true,
+    },
+  });
+  if (!order) return { error: 'Order not found' };
+  if (order.paymentMethod !== 'MOYASAR') return { error: 'This order is not a Moyasar payment' };
+  if (order.paymentStatus === 'PAID') {
+    return { ok: true, alreadyPaid: true, paymentId: order.paymentInvoiceId };
+  }
+  if (order.status !== 'PENDING_PAYMENT') return { error: 'Order can no longer be paid' };
+
+  let verified;
+  try {
+    verified = await moyasarService.verifyPayment(String(paymentId));
+  } catch (e) {
+    return { error: e.message || 'Could not verify Moyasar payment' };
+  }
+
+  if (verified.orderId && verified.orderId !== order.id) {
+    console.warn(
+      `[moyasar] attach refused: payment ${paymentId} metadata order ${verified.orderId} ≠ ${order.id}`
+    );
+    return { error: 'Payment does not belong to this order' };
+  }
+
+  // Soft amount check — full underpaid gate runs on confirm.
+  if (
+    verified.amountMajor != null &&
+    verified.amountMajor + 0.01 < Number(order.totalAmount) &&
+    (!verified.currency || verified.currency === (order.currency || 'SAR'))
+  ) {
+    return { error: 'Payment amount does not match this order' };
+  }
+
+  await prisma.order.update({
+    where: { id: order.id },
+    data: { paymentInvoiceId: String(paymentId) },
+  });
+
+  return { ok: true, paymentId: String(paymentId), status: verified.status };
+}
+
+/**
+ * Verify a Moyasar invoice/payment (authoritative server-side check) and place the order.
+ *
+ * Prefer `paymentId` (embedded form + webhooks). `invoiceId` / stored paymentInvoiceId may
+ * be a payment id or a legacy hosted-invoice id — we try both.
+ * Idempotent PAID claim + finalizePaidOrder (same as MyFatoorah).
+ *
+ * Returns { isPaid, orderId, status, ...flags }.
+ */
+async function confirmMoyasarPayment({ invoiceId = null, paymentId = null, orderHint = null } = {}) {
+  let verified = null;
+
+  // Prefer an explicit payment id (embedded form + webhooks). Callers may pass either a
+  // payment id or a legacy invoice id in either field — try payment then invoice.
+  if (paymentId) {
+    verified = await moyasarService.verifyPaymentOrInvoice(String(paymentId));
+  } else if (invoiceId) {
+    verified = await moyasarService.verifyPaymentOrInvoice(String(invoiceId));
+  } else if (orderHint) {
+    const row = await prisma.order.findUnique({
+      where: { id: String(orderHint) },
+      select: { paymentInvoiceId: true, paymentMethod: true },
+    });
+    if (row?.paymentMethod === 'MOYASAR' && row.paymentInvoiceId) {
+      verified = await moyasarService.verifyPaymentOrInvoice(String(row.paymentInvoiceId));
+    }
+  }
+
+  if (!verified) {
+    return { isPaid: false, orderId: null, status: null, reason: 'missing_moyasar_id' };
+  }
+
+  let orderId = verified.orderId || (orderHint ? String(orderHint) : null);
+  let order = null;
+
+  const orderSelect = {
+    id: true,
+    orderNumber: true,
+    userId: true,
+    totalAmount: true,
+    currency: true,
+    status: true,
+    paymentStatus: true,
+    paymentMethod: true,
+    clearCartOnPayment: true,
+    inventoryDeducted: true,
+    guestEmail: true,
+    user: { select: { email: true } },
+  };
+
+  if (orderId) {
+    order = await prisma.order.findUnique({ where: { id: orderId }, select: orderSelect });
+  }
+
+  // Match by stored gateway id (payment id for embedded, invoice id for legacy hosted).
+  if (!order && (verified.paymentId || verified.invoiceId)) {
+    const ids = [verified.paymentId, verified.invoiceId].filter(Boolean).map(String);
+    order = await prisma.order.findFirst({
+      where: { paymentInvoiceId: { in: ids }, paymentMethod: 'MOYASAR' },
+      select: orderSelect,
+    });
+    orderId = order?.id || null;
+  }
+
+  if (!order) {
+    return { isPaid: false, orderId: null, status: verified.status, reason: 'Order not found' };
+  }
+
+  if (order.paymentMethod !== 'MOYASAR') {
+    return { isPaid: false, orderId: order.id, status: verified.status, reason: 'not_a_moyasar_order' };
+  }
+
+  if (order.paymentStatus === 'PAID') {
+    if (order.status === 'PENDING_PAYMENT') {
+      await finalizePaidOrder(order, { firstPlacement: false });
+    }
+    return { isPaid: true, orderId: order.id, status: 'Paid', alreadyProcessed: true };
+  }
+
+  if (!verified.isPaid) {
+    const failedStatuses = new Set(['failed', 'expired', 'canceled', 'voided']);
+    if (failedStatuses.has(String(verified.status || '').toLowerCase())) {
+      await prisma.order.updateMany({
+        where: { id: order.id, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+        data: { paymentStatus: 'FAILED' },
+      });
+    }
+    return { isPaid: false, orderId: order.id, status: verified.status };
+  }
+
+  const chargedCurrency = order.currency || 'SAR';
+  const currencyKnown = !!verified.currency;
+  const sameCurrency = currencyKnown && verified.currency === chargedCurrency;
+  const underpaid =
+    verified.amountMajor != null && verified.amountMajor + 0.01 < Number(order.totalAmount);
+  if (underpaid && (sameCurrency || !currencyKnown)) {
+    console.error(
+      `[moyasar] order ${order.id} UNDERPAID: gateway ${verified.amountMajor} ${verified.currency} vs order ${order.totalAmount}`
+    );
+    await prisma.order.updateMany({
+      where: { id: order.id, paymentStatus: { in: ['UNPAID', 'FAILED'] } },
+      data: { paymentStatus: 'FAILED' },
+    });
+    return {
+      isPaid: false,
+      orderId: order.id,
+      status: verified.status,
+      reason: 'amount_mismatch_underpaid',
+    };
+  }
+
+  if (
+    verified.amountMajor != null &&
+    Math.abs(verified.amountMajor - Number(order.totalAmount)) > 0.01
+  ) {
+    console.warn(
+      `[moyasar] amount note for order ${order.id}: gateway ${verified.amountMajor} ${verified.currency || ''} vs order ${order.totalAmount}`
+    );
+  }
+
+  const txnId = verified.paymentId || verified.invoiceId || null;
+  const claim = await prisma.order.updateMany({
+    where: { id: order.id, paymentStatus: { not: 'PAID' } },
+    data: {
+      paymentStatus: 'PAID',
+      paymentTransactionId: txnId,
+      // Ensure reconcile can find this payment if attach never ran.
+      ...(txnId ? { paymentInvoiceId: txnId } : {}),
+    },
+  });
+  if (claim.count === 0) {
+    return { isPaid: true, orderId: order.id, status: 'Paid', alreadyProcessed: true };
+  }
+
+  await finalizePaidOrder(order, { firstPlacement: true });
+
+  if (order.status === 'CANCELLED') {
+    return { isPaid: true, orderId: order.id, status: 'Paid', warning: 'order_cancelled_needs_refund' };
+  }
+
+  return { isPaid: true, orderId: order.id, status: 'Paid' };
+}
+
 module.exports = {
   createOrder,
   createGuestOrder,
@@ -2876,7 +3156,9 @@ module.exports = {
   getOrderStatusOnly,
   updateOrderStatus,
   initiateOrderPayment,
+  attachMoyasarPayment,
   createPaymentSession,
   executeOrderPayment,
   confirmOrderPayment,
+  confirmMoyasarPayment,
 };
