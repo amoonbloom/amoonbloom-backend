@@ -56,6 +56,21 @@ async function createGuestOrder(req, res, next) {
   }
 }
 
+// POST /orders/express-checkout — PDP Apple Pay express (optionalAuth). Does NOT touch the cart.
+async function createExpressOrder(req, res, next) {
+  try {
+    const { order, error: errMsg } = await orderService.createExpressOrder(
+      req.userId ?? null,
+      req.body,
+      { regionCode: req.headers['x-region'] }
+    );
+    if (errMsg) return error(res, errMsg, 400);
+    return success(res, order, 'Order placed successfully', 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
 // POST /orders/buy-now — order a single product directly (Apple Pay / COD) without using the cart.
 async function buyNow(req, res, next) {
   try {
@@ -751,6 +766,7 @@ async function quote(req, res, next) {
 module.exports = {
   createOrder,
   createGuestOrder,
+  createExpressOrder,
   buyNow,
   quote,
   getOrderById,

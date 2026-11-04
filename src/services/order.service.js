@@ -1680,6 +1680,118 @@ async function createGuestOrder(guestInput = {}, opts = {}) {
 }
 
 /**
+ * PDP Express checkout (Apple Pay / Moyasar): place an order for the current product
+ * selection WITHOUT touching the cart. Same item + contact shape as guest-checkout,
+ * but:
+ *   - optionalAuth (userId may be set — order is linked; pay via /pay not /guest-pay)
+ *   - clearCart always false
+ *   - shippingAddress.area is softened so national-address-only / zone-only express
+ *     sheets still pass validateShippingAddress (prefer area → zone name → city/"Express")
+ *
+ * Payment is started afterwards with the existing pay / guest-pay endpoints.
+ */
+async function createExpressOrder(userId, expressInput = {}, opts = {}) {
+  const {
+    items,
+    orderMessage,
+    shippingAddress: rawAddress,
+    shortAddress,
+    promoCode,
+    email,
+    deliveryType,
+    scheduledDeliveryAt,
+    paymentMethod,
+  } = expressInput;
+
+  if (!Array.isArray(items) || items.length === 0) {
+    return { order: null, error: 'No items to order' };
+  }
+  const lineItems = [];
+  for (const it of items) {
+    const qty = Number(it?.quantity);
+    if (!it || typeof it.productId !== 'string' || !Number.isInteger(qty) || qty < 1) {
+      return { order: null, error: 'Each item needs a productId and a positive quantity' };
+    }
+    lineItems.push({
+      productId: it.productId,
+      quantity: qty,
+      message: it.message ?? null,
+      selectedOptions: it.selectedOptions ?? null,
+      giftCardSelected: it.giftCardSelected ?? false,
+      customName: it.customName ?? null,
+      cashArrangement: it.cashArrangement ?? null,
+    });
+  }
+
+  if (!rawAddress || typeof rawAddress !== 'object') {
+    return { order: null, error: 'A shipping address is required' };
+  }
+  const guestFullName = trimOrNullStr(rawAddress.fullName);
+  const guestPhone = trimOrNullStr(rawAddress.phone);
+  if (!guestFullName) return { order: null, error: 'Full name is required' };
+  if (!guestPhone) return { order: null, error: 'Phone number is required' };
+
+  // Soften area for express only — full checkout still requires a real area.
+  // Prefer an explicit area; else zone name; else (when a national short address
+  // is present) the city or a stable "Express" sentinel so createOrderCore can run.
+  let area = trimOrNullStr(rawAddress.area);
+  if (!area && rawAddress.deliveryZoneId) {
+    const zone = await deliveryZoneService.getZoneById(rawAddress.deliveryZoneId);
+    if (zone?.name) area = String(zone.name).trim() || null;
+  }
+  if (!area && trimOrNullStr(shortAddress)) {
+    area = trimOrNullStr(rawAddress.city) || 'Express';
+  }
+
+  const shippingAddress = {
+    ...rawAddress,
+    fullName: guestFullName,
+    phone: guestPhone,
+    area,
+  };
+
+  // Products come straight from the client — only PUBLISHED items may be bought
+  // (mirrors guest-checkout / Buy Now; createOrderCore additionally checks stock).
+  const productIds = [...new Set(lineItems.map((it) => it.productId))];
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds } },
+    select: { id: true, status: true, comingSoon: true, category: { select: { comingSoon: true } } },
+  });
+  const productById = new Map(products.map((p) => [p.id, p]));
+  for (const id of productIds) {
+    const p = productById.get(id);
+    if (!p || p.status !== 'PUBLISHED') {
+      return { order: null, error: 'A product in your order is no longer available' };
+    }
+  }
+
+  const guestContact = {
+    fullName: guestFullName,
+    phone: guestPhone,
+    email: email ? String(email).trim().toLowerCase() || null : null,
+  };
+
+  return createOrderCore(
+    userId ?? null,
+    {
+      lineItems,
+      orderMessage: orderMessage ?? null,
+      // Always inline — never require addressId for express (cart stays untouched).
+      shippingAddress,
+      shortAddress,
+      paymentMethod: paymentMethod || 'COD',
+      promoCode,
+      deliveryType,
+      scheduledDeliveryAt,
+      clearCart: false,
+      // Guests need the contact snapshot; authed orders use userId + shippingAddress.
+      ...(userId ? {} : { guestContact }),
+    },
+    opts
+  );
+}
+
+/**
  * Back-link guest orders to a user account by matching guestEmail. Called after
  * signup / signin / OAuth so a customer who checked out as a guest (with the same
  * email) sees those orders in their history. Idempotent — only touches orders
@@ -3146,6 +3258,7 @@ async function confirmMoyasarPayment({ invoiceId = null, paymentId = null, order
 module.exports = {
   createOrder,
   createGuestOrder,
+  createExpressOrder,
   linkGuestOrdersToUser,
   buyNow,
   quoteOrder,

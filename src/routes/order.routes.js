@@ -350,6 +350,78 @@ router.post(
 
 /**
  * @swagger
+ * /orders/express-checkout:
+ *   post:
+ *     summary: PDP express checkout (Apple Pay / Moyasar) — does not touch the cart
+ *     description: |
+ *       Places an order for the given line items without using or clearing the cart.
+ *       Same body shape as guest-checkout; `shippingAddress.area` is optional here
+ *       (softened from deliveryZoneId / shortAddress / city in the service).
+ *       optionalAuth: when a JWT is present the order is linked to the user; otherwise
+ *       it is a guest order. Follow with POST /orders/{id}/pay or /guest-pay.
+ *     tags: [Orders]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - $ref: '#/components/parameters/XRegionHeader'
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [items, shippingAddress]
+ *     responses:
+ *       201: { description: Order placed (PENDING_PAYMENT for online methods) }
+ *       400: { description: Validation / availability error }
+ */
+// Reuse guest-checkout validators with area optional — softens in createExpressOrder.
+const expressCheckoutBody = [
+  body('items').isArray({ min: 1 }).withMessage('items must be a non-empty array'),
+  body('items.*.productId').isUUID().withMessage('Each item needs a valid productId'),
+  body('items.*.quantity').isInt({ min: 1 }).withMessage('Each item quantity must be a positive integer'),
+  body('items.*.message').optional({ nullable: true }).trim(),
+  body('items.*.selectedOptions').optional({ nullable: true }).isObject().withMessage('selectedOptions must be an object'),
+  body('items.*.giftCardSelected').optional().isBoolean().withMessage('giftCardSelected must be a boolean'),
+  body('items.*.customName').optional({ nullable: true }).trim().isLength({ max: 120 }).withMessage('customName must be 120 characters or fewer'),
+  body('items.*.cashArrangement').optional({ nullable: true }).isObject().withMessage('cashArrangement must be an object'),
+  body('items.*.cashArrangement.cashAmount').optional({ nullable: true }).isFloat({ gt: 0 }).withMessage('cashArrangement.cashAmount must be a positive number'),
+  body('items.*.cashArrangement.denomination').optional({ nullable: true }).isInt({ gt: 0 }).withMessage('cashArrangement.denomination must be a positive whole number'),
+  body('items.*.cashArrangement.note').optional({ nullable: true }).trim().isLength({ max: 500 }).withMessage('cashArrangement.note must be 500 characters or fewer'),
+  body('email').optional({ nullable: true }).trim().isEmail().withMessage('A valid email is required'),
+  body('orderMessage').optional({ nullable: true }).trim(),
+  body('promoCode').optional().trim().isLength({ max: 50 }).withMessage('promoCode too long'),
+  body('deliveryType').optional().isIn(['STANDARD', 'SCHEDULED']).withMessage('deliveryType must be STANDARD or SCHEDULED'),
+  body('scheduledDeliveryAt').optional({ nullable: true }).isISO8601().withMessage('scheduledDeliveryAt must be a valid ISO date'),
+  body('shippingAddress').isObject().withMessage('shippingAddress is required'),
+  body('shippingAddress.fullName').trim().notEmpty().withMessage('Full name is required'),
+  body('shippingAddress.phone').trim().notEmpty().withMessage('Phone number is required'),
+  body('shippingAddress.streetAddress').optional({ nullable: true }).trim(),
+  body('shippingAddress.apartment').optional({ nullable: true }).trim(),
+  body('shippingAddress.city').optional({ nullable: true }).trim(),
+  body('shippingAddress.state').optional({ nullable: true }).trim(),
+  body('shippingAddress.postalCode').optional({ nullable: true }).trim(),
+  body('shippingAddress.country').optional({ nullable: true }).trim(),
+  // Optional on express only — service softens from zone / shortAddress / city.
+  body('shippingAddress.area').optional({ nullable: true }).trim(),
+  body('shippingAddress.deliveryZoneId').optional({ checkFalsy: true }).isUUID().withMessage('deliveryZoneId must be a valid id'),
+  body('paymentMethod')
+    .optional()
+    .isIn(['COD', 'MYFATOORAH', 'MOYASAR'])
+    .withMessage('paymentMethod must be COD, MYFATOORAH, or MOYASAR'),
+  shortAddressOptional,
+];
+
+router.post(
+  '/express-checkout',
+  optionalAuth,
+  authLimiter,
+  expressCheckoutBody,
+  handleValidationErrors,
+  orderController.createExpressOrder
+);
+
+/**
+ * @swagger
  * /orders/buy-now:
  *   post:
  *     summary: Buy a single product directly (Buy Now — does NOT use the cart)
