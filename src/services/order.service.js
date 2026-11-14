@@ -585,6 +585,8 @@ async function createOrderCore(userId, params = {}, opts = {}) {
           discountedPrice: true,
           giftCardExtraPrice: true,
           customNamePrice: true,
+          giftCardEnabled: true,
+          customNameEnabled: true,
           comingSoon: true,
         },
       },
@@ -753,7 +755,17 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   // also be placed via buyNow (bypassing the cart) or from a stale cart snapshot.
   const sanitizedLineItems = lineItems.map((item) => {
     const p = productById.get(item.productId);
-    const giftCardSelected = !!item.giftCardSelected && !!p?.giftCardEnabled;
+    const regionRow = Array.isArray(p?.regions) ? p.regions[0] : null;
+    // Per-region enable override (null = inherit product global).
+    const giftEnabled =
+      regionRow && regionRow.giftCardEnabled != null
+        ? !!regionRow.giftCardEnabled
+        : !!p?.giftCardEnabled;
+    const nameEnabled =
+      regionRow && regionRow.customNameEnabled != null
+        ? !!regionRow.customNameEnabled
+        : !!p?.customNameEnabled;
+    const giftCardSelected = !!item.giftCardSelected && giftEnabled;
     return {
       ...item,
       giftCardSelected,
@@ -762,7 +774,7 @@ async function createOrderCore(userId, params = {}, opts = {}) {
       giftCardMode: giftCardSelected
         ? resolveGiftCardMode(p?.giftCardMode, p?.category?.giftCardMode)
         : null,
-      customName: p?.customNameEnabled ? String(item.customName || '').trim() || null : null,
+      customName: nameEnabled ? String(item.customName || '').trim() || null : null,
     };
   });
 
@@ -963,6 +975,8 @@ async function createOrderCore(userId, params = {}, opts = {}) {
             discountedPrice: true,
             giftCardExtraPrice: true,
             customNamePrice: true,
+            giftCardEnabled: true,
+            customNameEnabled: true,
           },
         },
         giftCardEnabled: true,
@@ -2766,6 +2780,8 @@ async function quoteOrder(userId, input = {}, opts = {}) {
           discountedPrice: true,
           giftCardExtraPrice: true,
           customNamePrice: true,
+          giftCardEnabled: true,
+          customNameEnabled: true,
         },
       },
       giftCardEnabled: true,
@@ -2790,10 +2806,13 @@ async function quoteOrder(userId, input = {}, opts = {}) {
     return { productId: it.productId, categoryId: p.categoryId, quantity: it.quantity, unitPrice: round2(base + extra) };
   });
 
-  // 5) Promo discount — validated + computed against the same live prices. In a preview an
-  //    invalid/expired/ineligible code just means no discount (never an error).
+  // 5) Promo discount — validated + computed against the same live prices. A bad promo
+  //    still yields discount 0 (quote never fails the whole request), but we surface
+  //    `promoError: { code, message }` so the app can show why the code was rejected
+  //    without waiting for checkout to throw PROMO_*.
   let discount = 0;
   let appliedPromoCode = null;
+  let promoError = null;
   if (promoCode && String(promoCode).trim()) {
     try {
       const promoItems = pricedLines.map((l) => ({
@@ -2807,8 +2826,11 @@ async function quoteOrder(userId, input = {}, opts = {}) {
         discount = round2(Number(res.discountAmount) || 0);
         appliedPromoCode = res.promoCode?.code ?? null;
       }
-    } catch (_) {
-      /* invalid promo in a quote → ignore, discount stays 0 */
+    } catch (err) {
+      promoError = {
+        code: err.code || 'PROMO_INVALID',
+        message: err.message || 'Promo code could not be applied',
+      };
     }
   }
 
@@ -2854,6 +2876,9 @@ async function quoteOrder(userId, input = {}, opts = {}) {
       totalAmount,
       currency,
       appliedPromoCode,
+      // null when no promo was sent or it applied successfully; otherwise the same
+      // PROMO_* codes checkout would return (quote itself still succeeds with 200).
+      promoError,
       // Context the app can surface without a second call.
       freeDeliveryThreshold: deliveryConfig.freeDeliveryThreshold ?? null,
       minOrderAmount: deliveryConfig.minOrderAmount ?? null,

@@ -34,12 +34,15 @@ async function unreadCount(req, res, next) {
   }
 }
 
-// PATCH /notifications/:id/read — mark a single notification read.
+// PATCH /notifications/:id/read — mark a single notification read (idempotent).
+// Already-read → 200. Missing / not owned → 404.
 async function markRead(req, res, next) {
   try {
-    const count = await notificationService.markRead(req.userId, req.params.id);
-    if (count === 0) return error(res, 'Notification not found or already read', 404);
-    return success(res, null, 'Notification marked read');
+    const result = await notificationService.markRead(req.userId, req.params.id);
+    if (!result || result.notFound) {
+      return error(res, 'Notification not found', 404);
+    }
+    return success(res, { alreadyRead: !!result.alreadyRead }, 'Notification marked read');
   } catch (err) {
     next(err);
   }

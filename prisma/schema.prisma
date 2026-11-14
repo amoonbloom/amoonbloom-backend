@@ -39,7 +39,13 @@ model Region {
   // days (e.g. 1 for UAE, 3 for KSA). Null means not configured — the storefront
   // shows no ETA. Snapshotted onto Order.estimatedDeliveryDays at checkout time
   // so a later change here doesn't retroactively alter historical orders.
+  // When `standardDeliveryDaysMax` is also set (and greater), the app shows a RANGE
+  // ("3 to 5 days"); when only this field is set, the app shows a single window
+  // ("within 3 days"). Scheduling / earliest-date math always uses this MIN value.
   standardDeliveryDays           Int?
+  // Optional upper bound for the region's standard delivery window (whole days).
+  // Null = single-value display using standardDeliveryDays only. Must be >= min when set.
+  standardDeliveryDaysMax        Int?
   // IANA timezone the region operates in (e.g. "Asia/Dubai", "Asia/Riyadh"). Drives ALL
   // delivery day-boundary math: same-day cutoff, "today", allowed weekdays, blackout
   // dates. Must not be null — every region has a local clock; defaults to Asia/Dubai so
@@ -266,7 +272,12 @@ model DeliveryZone {
   sameDayCutoff                   String?
   // Standard courier lead time (whole days) for this zone. null = inherit
   // Region.standardDeliveryDays. Distinct from product/category PREP lead days.
+  // When `standardLeadDaysMax` is also set (and greater), the app shows a RANGE;
+  // when only this field is set (or inherited as a single), show "within N days".
   standardLeadDays                Int?
+  // Optional upper bound for this zone's standard window. null = inherit
+  // Region.standardDeliveryDaysMax (or single-value display when that is also null).
+  standardLeadDaysMax             Int?
   // Allowed delivery weekdays (0=Sun..6=Sat). [] = inherit the region's deliveryDays.
   deliveryDays                    Int[]    @default([])
   // COD offered in this zone? null = inherit Region.codEnabled (effective default yes).
@@ -340,6 +351,11 @@ model ProductRegion {
   // global Product.giftCardExtraPrice / Product.customNamePrice for this region.
   giftCardExtraPrice              Decimal? @db.Decimal(10, 2)
   customNamePrice                 Decimal? @db.Decimal(10, 2)
+  // Per-region enable for the gift-card / custom-name options. Null = inherit the
+  // product's global Product.giftCardEnabled / Product.customNameEnabled. true/false
+  // overrides for this region only (e.g. offer gift card in UAE but not SA).
+  giftCardEnabled                 Boolean?
+  customNameEnabled               Boolean?
   // Per-region "coming soon" state for this product — visible in this region but
   // not orderable here. Per-region (not global) so a product can be live in one
   // region and a teaser in another; default false so a NEW region is available
@@ -525,6 +541,7 @@ model User {
   cart      Cart?
   orders    Order[]
   addresses Address[]
+  wishlist  WishlistItem[]
 
   pushDevices             UserPushDevice[]
   notificationPreferences UserNotificationPreferences?
@@ -1020,6 +1037,7 @@ model Product {
   regions                ProductRegion[]
   zoneLeadDays           ProductZone[]
   reviews                Review[]
+  wishlistItems          WishlistItem[]
 
   @@index([categoryId])
   @@index([title])
@@ -1028,6 +1046,33 @@ model Product {
   @@index([status, createdAt])
   // Serves the admin-ordered list: WHERE status=? ORDER BY sortOrder ASC, createdAt DESC.
   @@index([status, sortOrder])
+}
+
+/// Saved wishlist line for a signed-in user OR a guest device.
+/// Guests identify themselves with a durable client UUID (`guestToken`, sent as
+/// `X-Guest-Token`). On signup / sign-in / OAuth the guest lines are claimed into
+/// the user's wishlist (union by productId+variantKey) — same idea as linking
+/// guest orders by email. Exactly one of userId / guestToken is set.
+model WishlistItem {
+  id              String   @id @default(uuid())
+  userId          String?
+  guestToken      String?
+  productId       String
+  /// Chosen variant, e.g. {"Colour":"Pink","Size":"M"} — same shape as cart.
+  selectedOptions Json?
+  /// Stable serialization of selectedOptions ("" = no variant). Part of uniqueness.
+  variantKey      String   @default("")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user    User?   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId, variantKey])
+  @@unique([guestToken, productId, variantKey])
+  @@index([userId])
+  @@index([guestToken])
+  @@index([productId])
 }
 
 /// A customer star-rating + written review for a product. Either `userId` is set

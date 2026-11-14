@@ -109,13 +109,14 @@ async function run() {
   check('unreadCount = 3', list1.unreadCount === 3);
 
   const mr = await inboxService.markRead(inboxUser.id, n1.id);
-  check('markRead affects 1', mr === 1);
-  check('markRead is idempotent (0 on already-read)', (await inboxService.markRead(inboxUser.id, n1.id)) === 0);
+  check('markRead affects 1', mr.count === 1 && !mr.alreadyRead);
+  const mrAgain = await inboxService.markRead(inboxUser.id, n1.id);
+  check('markRead is idempotent (alreadyRead on second call)', mrAgain.alreadyRead === true && mrAgain.count === 0);
   check('unreadCount = 2 after read', (await inboxService.unreadCount(inboxUser.id)) === 2);
 
   // ownership: another user cannot mark this user's notification
   const otherUser = await makeUser();
-  check('markRead is owner-scoped', (await inboxService.markRead(otherUser.id, n1.id)) === 0);
+  check('markRead is owner-scoped', (await inboxService.markRead(otherUser.id, n1.id)).notFound === true);
 
   const mar = await inboxService.markAllRead(inboxUser.id);
   check('markAllRead clears the rest', mar === 2 && (await inboxService.unreadCount(inboxUser.id)) === 0);

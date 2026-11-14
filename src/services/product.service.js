@@ -321,6 +321,9 @@ function mapProduct(product) {
         cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
         giftCardExtraPrice: decimalToNumber(r.giftCardExtraPrice),
         customNamePrice: decimalToNumber(r.customNamePrice),
+        // null = inherit product global enable for this region.
+        giftCardEnabled: r.giftCardEnabled == null ? null : !!r.giftCardEnabled,
+        customNameEnabled: r.customNameEnabled == null ? null : !!r.customNameEnabled,
       }));
       // Which regions this product is a coming-soon teaser in (for the admin edit form).
       out.comingSoonRegionIds = regions.filter((r) => r.comingSoon).map((r) => r.regionId);
@@ -333,6 +336,8 @@ function mapProduct(product) {
             discountedPrice: decimalToNumber(regions[0].discountedPrice),
             giftCardExtraPrice: decimalToNumber(regions[0].giftCardExtraPrice),
             customNamePrice: decimalToNumber(regions[0].customNamePrice),
+            giftCardEnabled: regions[0].giftCardEnabled == null ? null : !!regions[0].giftCardEnabled,
+            customNameEnabled: regions[0].customNameEnabled == null ? null : !!regions[0].customNameEnabled,
             comingSoon: !!regions[0].comingSoon,
             onSale: !!regions[0].onSale,
           }
@@ -428,6 +433,11 @@ function applyRegionCurrency(mapped) {
       override.giftCardExtraPrice != null ? override.giftCardExtraPrice : clean.giftCardExtraPrice,
     customNamePrice:
       override.customNamePrice != null ? override.customNamePrice : clean.customNamePrice,
+    // Per-region gift enable: null = inherit product global; true/false = override.
+    giftCardEnabled:
+      override.giftCardEnabled != null ? !!override.giftCardEnabled : !!clean.giftCardEnabled,
+    customNameEnabled:
+      override.customNameEnabled != null ? !!override.customNameEnabled : !!clean.customNameEnabled,
     // This region's own coming-soon (the category cascade was already folded into
     // category.comingSoon in mapProduct) — the storefront ORs the two.
     comingSoon: !!override.comingSoon,
@@ -467,6 +477,8 @@ function regionPriceInclude(regionId, zoneId = null) {
             discountedPrice: true,
             giftCardExtraPrice: true,
             customNamePrice: true,
+            giftCardEnabled: true,
+            customNameEnabled: true,
             comingSoon: true,
             onSale: true,
           },
@@ -585,7 +597,9 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
   let productZoneLead = new Map();
   let categoryZoneLead = new Map();
   let zoneStandard = null;
+  let zoneStandardMax = null;
   let regionStandard = null;
+  let regionStandardMax = null;
 
   if (regionId) {
     const productIds = [...new Set(mappedProducts.map((p) => p.id).filter(Boolean))];
@@ -611,6 +625,7 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
     productRegionLead = new Map(prRows.map((r) => [r.productId, r.deliveryLeadDays]));
     categoryRegionLead = new Map(crRows.map((r) => [r.categoryId, r.deliveryLeadDays]));
     regionStandard = region?.standardDeliveryDays ?? null;
+    regionStandardMax = region?.standardDeliveryDaysMax ?? null;
 
     // Zone tier + the zone's standard lead — highest-priority location tiers. The zone must
     // belong to the requesting region (guards a stale/tampered id).
@@ -630,7 +645,7 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
           : [],
         prisma.deliveryZone.findFirst({
           where: { id: zoneId, regionId, isActive: true },
-          select: { standardLeadDays: true },
+          select: { standardLeadDays: true, standardLeadDaysMax: true },
         }),
       ]);
       // Only apply ANY zone tier (product/category override OR standard) when the zone is a
@@ -640,13 +655,14 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
         productZoneLead = new Map(pzRows.map((r) => [r.productId, r.deliveryLeadDays]));
         categoryZoneLead = new Map(czRows.map((r) => [r.categoryId, r.deliveryLeadDays]));
         zoneStandard = zone.standardLeadDays ?? null;
+        zoneStandardMax = zone.standardLeadDaysMax ?? null;
       }
     }
   }
 
   for (const p of mappedProducts) {
     const catId = p.category?.id ?? p.categoryId ?? null;
-    p.resolvedDeliveryLeadDays = resolveDeliveryLeadDays({
+    const args = {
       productZoneLeadDays: productZoneLead.get(p.id) ?? null,
       productRegionLeadDays: productRegionLead.get(p.id) ?? null,
       productLeadDays: p.deliveryLeadDays,
@@ -656,7 +672,29 @@ async function attachResolvedDeliveryLeadDays(mappedProducts, regionId = null, z
       zoneStandardLeadDays: zoneStandard,
       regionStandardLeadDays: regionStandard,
       defaultLeadDays,
-    });
+    };
+    p.resolvedDeliveryLeadDays = resolveDeliveryLeadDays(args);
+    // Range (max) only applies when the winning value came from zone/region STANDARD
+    // (not a product/category override, which is always a single promised day).
+    const wonFromProductOrCategory =
+      args.productZoneLeadDays != null ||
+      args.productRegionLeadDays != null ||
+      args.productLeadDays != null ||
+      args.categoryZoneLeadDays != null ||
+      args.categoryRegionLeadDays != null ||
+      args.categoryLeadDays != null;
+    let max = null;
+    if (!wonFromProductOrCategory) {
+      if (zoneStandard != null) {
+        max = zoneStandardMax != null ? zoneStandardMax : regionStandardMax;
+      } else if (regionStandard != null) {
+        max = regionStandardMax;
+      }
+    }
+    p.resolvedDeliveryLeadDaysMax =
+      max != null && p.resolvedDeliveryLeadDays != null && max > p.resolvedDeliveryLeadDays
+        ? max
+        : null;
   }
   return mappedProducts;
 }
@@ -697,7 +735,9 @@ function regionPriceFromRow(row) {
 // Region overrides: when `productRow.regions` is a region-scoped ProductRegion
 // include (0-1 row, same shape cart/order already pass for price resolution),
 // a non-null giftCardExtraPrice / customNamePrice on that row wins over the
-// product's global charge. Null = fall back to Product.*.
+// product's global charge. Null = fall back to Product.*. Enable flags: region
+// Boolean override wins when non-null; otherwise Product.giftCardEnabled /
+// customNameEnabled.
 function optionExtraCharge(productRow, { giftCardSelected, customName } = {}) {
   const override = Array.isArray(productRow.regions) ? productRow.regions[0] : null;
   const giftExtra =
@@ -708,11 +748,19 @@ function optionExtraCharge(productRow, { giftCardSelected, customName } = {}) {
     override && decimalToNumber(override.customNamePrice) != null
       ? decimalToNumber(override.customNamePrice)
       : decimalToNumber(productRow.customNamePrice) ?? 0;
+  const giftEnabled =
+    override && override.giftCardEnabled != null
+      ? !!override.giftCardEnabled
+      : !!productRow.giftCardEnabled;
+  const nameEnabled =
+    override && override.customNameEnabled != null
+      ? !!override.customNameEnabled
+      : !!productRow.customNameEnabled;
   let extra = 0;
-  if (giftCardSelected && productRow.giftCardEnabled) {
+  if (giftCardSelected && giftEnabled) {
     extra += giftExtra;
   }
-  if (customName && productRow.customNameEnabled) {
+  if (customName && nameEnabled) {
     extra += nameExtra;
   }
   return extra;
@@ -1040,6 +1088,15 @@ function buildRegionPriceMap(regionPrices) {
       entry.customNamePrice != null && entry.customNamePrice !== ''
         ? Number(entry.customNamePrice)
         : null;
+    // Per-region enable overrides: null/undefined = inherit product global; true/false = force.
+    const giftCardEnabled =
+      entry.giftCardEnabled === null || entry.giftCardEnabled === undefined
+        ? null
+        : !!entry.giftCardEnabled;
+    const customNameEnabled =
+      entry.customNameEnabled === null || entry.customNameEnabled === undefined
+        ? null
+        : !!entry.customNameEnabled;
     map.set(entry.regionId, {
       price,
       discountedPrice,
@@ -1048,6 +1105,8 @@ function buildRegionPriceMap(regionPrices) {
       cashArrangementFeeMarginPercent: feeSchedule.feeMarginPercent,
       giftCardExtraPrice: Number.isFinite(giftCardExtraPrice) ? giftCardExtraPrice : null,
       customNamePrice: Number.isFinite(customNamePrice) ? customNamePrice : null,
+      giftCardEnabled,
+      customNameEnabled,
     });
   }
   return map;
@@ -1281,6 +1340,8 @@ async function createProduct(data) {
                     cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
                     giftCardExtraPrice: rp?.giftCardExtraPrice ?? null,
                     customNamePrice: rp?.customNamePrice ?? null,
+                    giftCardEnabled: rp?.giftCardEnabled ?? null,
+                    customNameEnabled: rp?.customNameEnabled ?? null,
                     comingSoon: comingSoonSet.has(regionId),
                     onSale: onSaleSet.has(regionId),
                   };
@@ -1464,6 +1525,8 @@ async function updateProduct(id, data) {
         cashArrangementFeeMarginPercent: true,
         giftCardExtraPrice: true,
         customNamePrice: true,
+        giftCardEnabled: true,
+        customNameEnabled: true,
         comingSoon: true,
         onSale: true,
       },
@@ -1481,6 +1544,8 @@ async function updateProduct(id, data) {
           cashArrangementFeeMarginPercent: decimalToNumber(r.cashArrangementFeeMarginPercent),
           giftCardExtraPrice: decimalToNumber(r.giftCardExtraPrice),
           customNamePrice: decimalToNumber(r.customNamePrice),
+          giftCardEnabled: r.giftCardEnabled == null ? null : !!r.giftCardEnabled,
+          customNameEnabled: r.customNameEnabled == null ? null : !!r.customNameEnabled,
         },
       ])
     );
@@ -1708,6 +1773,8 @@ async function updateProduct(id, data) {
               cashArrangementFeeMarginPercent: rp?.cashArrangementFeeMarginPercent ?? null,
               giftCardExtraPrice: rp?.giftCardExtraPrice ?? null,
               customNamePrice: rp?.customNamePrice ?? null,
+              giftCardEnabled: rp?.giftCardEnabled ?? null,
+              customNameEnabled: rp?.customNameEnabled ?? null,
               // Preserve this region's coming-soon across a rewrite; new region → false.
               comingSoon: existingRegionComingSoon.get(regionId) ?? false,
               // Preserve this region's on-sale across a rewrite; new region → false.

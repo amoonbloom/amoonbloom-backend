@@ -23,7 +23,7 @@ const { resolveRegion } = require('../middleware/region');
  *     description: |
  *       Create a new product.
  *       **Category:** To put the product in a specific category, add **`categoryId`** (UUID). Open **Categories → GET /categories**, copy the `id` of the desired category, and include it in this body. You can also leave it out and set **`categoryId`** later with **PUT /products/{id}**.
- *       **Images:** optional `images` array (up to 10 public HTTPS URLs in display order; first = primary thumbnail).
+ *       **Images:** optional `images` array (up to 20 public HTTPS URLs in display order; first = primary thumbnail).
  *       Upload files with **POST /upload/image** (e.g. `?path=products`), then paste the returned `url` values into `images`.
  *     tags: [Products]
  *     security:
@@ -167,6 +167,10 @@ const createValidation = [
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].customNamePrice must be between 0 and 99999999.99').bail()
     .custom(isTwoDecimals).withMessage('regionPrices[].customNamePrice supports at most 2 decimal places'),
+  body('regionPrices.*.giftCardEnabled').optional({ values: 'null' }).isBoolean()
+    .withMessage('regionPrices[].giftCardEnabled must be a boolean (or null to inherit)'),
+  body('regionPrices.*.customNameEnabled').optional({ values: 'null' }).isBoolean()
+    .withMessage('regionPrices[].customNameEnabled must be a boolean (or null to inherit)'),
   // Per-delivery-zone "ships within N days" override (highest precedence). null clears it.
   body('zoneLeadDays').optional().isArray().withMessage('zoneLeadDays must be an array'),
   body('zoneLeadDays.*.zoneId').isString().trim().notEmpty().withMessage('zoneLeadDays[].zoneId is required'),
@@ -373,6 +377,10 @@ const updateValidation = [
     .optional({ values: 'null' })
     .isFloat({ min: 0, max: 99999999.99 }).withMessage('regionPrices[].customNamePrice must be between 0 and 99999999.99').bail()
     .custom(isTwoDecimals).withMessage('regionPrices[].customNamePrice supports at most 2 decimal places'),
+  body('regionPrices.*.giftCardEnabled').optional({ values: 'null' }).isBoolean()
+    .withMessage('regionPrices[].giftCardEnabled must be a boolean (or null to inherit)'),
+  body('regionPrices.*.customNameEnabled').optional({ values: 'null' }).isBoolean()
+    .withMessage('regionPrices[].customNameEnabled must be a boolean (or null to inherit)'),
   // Per-delivery-zone "ships within N days" override (highest precedence). null clears it.
   body('zoneLeadDays').optional().isArray().withMessage('zoneLeadDays must be an array'),
   body('zoneLeadDays.*.zoneId').isString().trim().notEmpty().withMessage('zoneLeadDays[].zoneId is required'),

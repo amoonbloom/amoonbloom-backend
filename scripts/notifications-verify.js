@@ -48,19 +48,19 @@ async function main() {
   // 3. mark one read (idempotent)
   const target = list.data[2].id; // oldest
   let n = await svc.markRead(a.id, target);
-  ok('markRead marks exactly one', n === 1, `got ${n}`);
+  ok('markRead marks exactly one', n.count === 1 && !n.alreadyRead, `got ${JSON.stringify(n)}`);
   ok('unread drops to 2', (await svc.unreadCount(a.id)) === 2);
   n = await svc.markRead(a.id, target);
-  ok('re-reading an already-read one affects 0 rows', n === 0, `got ${n}`);
+  ok('re-reading an already-read one is idempotent', n.alreadyRead === true && n.count === 0, `got ${JSON.stringify(n)}`);
 
   // 4. cross-user isolation — B cannot read A's notification
   n = await svc.markRead(b.id, list.data[0].id);
-  ok('a user cannot mark another user\'s notification read', n === 0, `got ${n}`);
+  ok('a user cannot mark another user\'s notification read', n.notFound === true, `got ${JSON.stringify(n)}`);
   ok('A\'s unread unchanged after B\'s attempt', (await svc.unreadCount(a.id)) === 2);
 
   // 5. unknown id
   n = await svc.markRead(a.id, '00000000-0000-0000-0000-000000000000');
-  ok('marking an unknown id affects 0 rows', n === 0);
+  ok('marking an unknown id is notFound', n.notFound === true);
 
   // 6. unreadOnly filter
   const unreadList = await svc.list(a.id, { unreadOnly: true });

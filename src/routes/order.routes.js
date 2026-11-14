@@ -210,8 +210,9 @@ router.post(
  *       zone-accurate delivery fee, and VAT — computed with the SAME helpers as checkout, WITHOUT
  *       creating an order. Works for signed-in users (falls back to their server cart when `items`
  *       is omitted) and guests. Pass `addressId` (or `shippingAddress.deliveryZoneId`) so the
- *       delivery zone resolves the correct fee; an invalid/expired `promoCode` is ignored (no
- *       discount) rather than erroring. Cash arrangement is excluded (it's a per-line add-on).
+ *       delivery zone resolves the correct fee. An invalid/expired `promoCode` does **not** fail
+ *       the quote (discount stays 0); instead `promoError: { code, message }` is returned with the
+ *       same PROMO_* codes checkout would use. Cash arrangement is excluded (per-line add-on).
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
@@ -234,7 +235,7 @@ router.post(
  *               promoCode: { type: string, nullable: true }
  *     responses:
  *       200:
- *         description: "{ subtotalAmount, discountAmount, shippingAmount, taxAmount, vatRatePercent, vatInclusive, totalAmount, currency, appliedPromoCode, freeDeliveryThreshold, minOrderAmount, maxOrderAmount, deliveryZoneName }"
+ *         description: "{ subtotalAmount, discountAmount, shippingAmount, taxAmount, vatRatePercent, vatInclusive, totalAmount, currency, appliedPromoCode, promoError, freeDeliveryThreshold, minOrderAmount, maxOrderAmount, deliveryZoneName }"
  */
 router.post(
   '/quote',

@@ -31,6 +31,7 @@ const REGION_SELECT = {
   legalEntity: true,
   shippingFlatRate: true,
   standardDeliveryDays: true,
+  standardDeliveryDaysMax: true,
   // city-level delivery config
   timezone: true,
   freeDeliveryThreshold: true,
@@ -135,13 +136,33 @@ function parseShippingFlatRate(value) {
 
 /** Blank/null/undefined -> null (not configured, no ETA shown); otherwise a
  *  non-negative whole number of days, capped at 90 to reject garbage input. */
-function parseStandardDeliveryDays(value) {
+function parseStandardDeliveryDays(value, fieldName = 'standardDeliveryDays') {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0 || n > 90) {
-    throw Object.assign(new Error('standardDeliveryDays must be a whole number between 0 and 90'), { code: 'VALIDATION' });
+    throw Object.assign(new Error(`${fieldName} must be a whole number between 0 and 90`), { code: 'VALIDATION' });
   }
   return n;
+}
+
+/** Ensures max >= min when both are set. Returns { min, max } with max normalized
+ *  to null when it equals min (single-value display). */
+function normalizeDeliveryDaysRange(min, max) {
+  if (max != null && min == null) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax requires standardDeliveryDays (the lower bound)'),
+      { code: 'VALIDATION' }
+    );
+  }
+  if (min != null && max != null && max < min) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax must be greater than or equal to standardDeliveryDays'),
+      { code: 'VALIDATION' }
+    );
+  }
+  // max === min → treat as single-value (clear max) so the app shows "within N days".
+  if (min != null && max != null && max === min) return { min, max: null };
+  return { min, max };
 }
 
 /** Blank/null/undefined -> null; otherwise the trimmed string. Shared by every
@@ -365,7 +386,16 @@ async function createRegion(data) {
         currency: data.currency ? String(data.currency).trim().toUpperCase() : 'AED',
         legalEntity: trimOrNull(data.legalEntity),
         shippingFlatRate: parseShippingFlatRate(data.shippingFlatRate),
-        standardDeliveryDays: parseStandardDeliveryDays(data.standardDeliveryDays),
+        ...(() => {
+          const range = normalizeDeliveryDaysRange(
+            parseStandardDeliveryDays(data.standardDeliveryDays),
+            parseStandardDeliveryDays(data.standardDeliveryDaysMax, 'standardDeliveryDaysMax')
+          );
+          return {
+            standardDeliveryDays: range.min,
+            standardDeliveryDaysMax: range.max,
+          };
+        })(),
         iso2: parseIso2(data.iso2),
         urlSlug: parseUrlSlug(data.urlSlug),
         contactEmail: trimOrNull(data.contactEmail),
@@ -449,8 +479,19 @@ async function updateRegion(id, data) {
   if (data.shippingFlatRate !== undefined) {
     payload.shippingFlatRate = parseShippingFlatRate(data.shippingFlatRate);
   }
-  if (data.standardDeliveryDays !== undefined) {
-    payload.standardDeliveryDays = parseStandardDeliveryDays(data.standardDeliveryDays);
+  if (data.standardDeliveryDays !== undefined || data.standardDeliveryDaysMax !== undefined) {
+    // Partial update: resolve against the current row when only one side is sent.
+    const nextMin =
+      data.standardDeliveryDays !== undefined
+        ? parseStandardDeliveryDays(data.standardDeliveryDays)
+        : existing.standardDeliveryDays ?? null;
+    const nextMax =
+      data.standardDeliveryDaysMax !== undefined
+        ? parseStandardDeliveryDays(data.standardDeliveryDaysMax, 'standardDeliveryDaysMax')
+        : existing.standardDeliveryDaysMax ?? null;
+    const range = normalizeDeliveryDaysRange(nextMin, nextMax);
+    payload.standardDeliveryDays = range.min;
+    payload.standardDeliveryDaysMax = range.max;
   }
   if (data.iso2 !== undefined) payload.iso2 = parseIso2(data.iso2);
   if (data.urlSlug !== undefined) payload.urlSlug = parseUrlSlug(data.urlSlug);

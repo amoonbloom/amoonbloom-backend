@@ -24,6 +24,11 @@ async function create(req, res, next) {
     const address = await addressService.createAddress(req.userId, req.body, await currentRegionId(req));
     return success(res, address, 'Address added successfully', 201);
   } catch (err) {
+    // Cap is MAX_ADDRESSES_PER_USER (10). Map to 409 so the app can show the
+    // real message instead of a generic production 500 "Internal server error".
+    if (err.code === 'ADDRESS_LIMIT_REACHED') {
+      return error(res, err.message, 409);
+    }
     next(err);
   }
 }

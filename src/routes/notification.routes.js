@@ -80,9 +80,12 @@ router.post('/read-all', verifyToken, notificationController.markAllRead);
  *         name: id
  *         required: true
  *         schema: { type: string }
+ *     description: |
+ *       Idempotent for the owner. Already-read notifications return **200** with
+ *       `data.alreadyRead: true`. Missing / not-owned ids return **404**.
  *     responses:
- *       200: { description: Marked read }
- *       404: { description: Not found or already read }
+ *       200: { description: Marked read (or already read) }
+ *       404: { description: Notification not found }
  */
 router.patch(
   '/:id/read',

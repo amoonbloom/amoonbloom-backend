@@ -6,6 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const { OAuth2Client } = require('google-auth-library');
 const { verifyAppleToken } = require('../services/appleAuth.service');
 const refreshTokenService = require('../services/refreshToken.service');
+const wishlistService = require('../services/wishlist.service');
 const regionService = require('../services/region.service');
 const orderService = require('../services/order.service');
 const notify = require('../notifications/notify');
@@ -83,6 +84,11 @@ function authSessionUserFields(user) {
     status: user.status,
     managerTitle: user.role === 'MANAGER' ? user.managerTitle || null : null,
     managerPermissions: user.role === 'MANAGER' ? user.managerPermissions || [] : [],
+    // Auth capability flags — same shape as GET /auth/user/:userId so the app can
+    // decide "set password" / "linked Google|Apple" without a second profile call.
+    hasPassword: !!user.password,
+    isGoogleUser: !!user.googleId,
+    isAppleUser: !!user.appleId,
   };
   if (user.avatar != null) base.avatar = user.avatar;
   if (user.isEmailVerified != null) base.isEmailVerified = user.isEmailVerified;
@@ -100,6 +106,28 @@ async function linkGuestOrders(userId, email) {
   } catch (err) {
     console.error('linkGuestOrdersToUser failed', { userId, message: err?.message });
   }
+}
+
+/**
+ * Claim a guest-device wishlist into the new session. Token may arrive as
+ * `X-Guest-Token` or body `guestToken`. Best-effort — never fails auth.
+ */
+async function claimGuestWishlist(userId, req) {
+  try {
+    const token =
+      req?.headers?.['x-guest-token'] ||
+      req?.body?.guestToken ||
+      null;
+    await wishlistService.claimGuestWishlist(userId, token);
+  } catch (err) {
+    console.error('claimGuestWishlist failed', { userId, message: err?.message });
+  }
+}
+
+/** Orders (by email) + wishlist (by guest token) after any successful auth. */
+async function attachGuestData(userId, email, req) {
+  await linkGuestOrders(userId, email);
+  await claimGuestWishlist(userId, req);
 }
 
 // Signup
@@ -128,21 +156,28 @@ const signup = async (req, res, next) => {
         password: hashedPassword,
         regionId,
       },
-      select: { id: true, email: true, fullName: true, role: true, status: true, tokenVersion: true, regionId: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        fullName: true,
+        role: true,
+        status: true,
+        tokenVersion: true,
+        regionId: true,
+        createdAt: true,
+        password: true,
+        googleId: true,
+        appleId: true,
+      },
     });
 
-    // Back-link any orders this person placed as a guest with the same email so
-    // they show up in their new account. Best-effort — never fail signup over it.
-    await linkGuestOrders(created.id, created.email);
+    // Back-link guest orders (same email) + claim guest wishlist (X-Guest-Token).
+    await attachGuestData(created.id, created.email, req);
 
     const { accessToken, refreshToken, refreshTokenExpiresAt } = await issueAuthTokens(created, req);
     const responseData = {
       user: {
-        id: created.id,
-        email: created.email,
-        fullName: created.fullName || null,
-        role: created.role,
-        status: created.status,
+        ...authSessionUserFields(created),
         regionId: created.regionId || null,
         createdAt: created.createdAt,
       },
@@ -182,8 +217,8 @@ const signin = async (req, res, next) => {
       return error(res, 'Your account has been deactivated. Please contact support.', 403);
     }
 
-    // Claim any guest orders placed with this email since the account was created.
-    await linkGuestOrders(user.id, user.email);
+    // Claim guest orders (email) + guest wishlist (X-Guest-Token / body.guestToken).
+    await attachGuestData(user.id, user.email, req);
 
     const { accessToken, refreshToken, refreshTokenExpiresAt } = await issueAuthTokens(user, req);
     const responseData = {
@@ -357,8 +392,8 @@ const googleLogin = async (req, res, next) => {
       return error(res, 'Your account has been deactivated. Please contact support.', 403);
     }
 
-    // Claim guest orders placed with this email before the account existed.
-    await linkGuestOrders(user.id, user.email);
+    // Claim guest orders (email) + guest wishlist (X-Guest-Token / body.guestToken).
+    await attachGuestData(user.id, user.email, req);
 
     // Renamed locals here only — the request body already destructured a Google
     // `accessToken` (the OAuth bearer the client passed us). We need a different
@@ -518,20 +553,12 @@ const appleLogin = async (req, res, next) => {
       return error(res, 'Your account has been deactivated. Please contact support.', 403);
     }
 
-    // Claim guest orders placed with this email before the account existed.
-    await linkGuestOrders(user.id, user.email);
+    // Claim guest orders (email) + guest wishlist (X-Guest-Token / body.guestToken).
+    await attachGuestData(user.id, user.email, req);
 
     const { accessToken, refreshToken, refreshTokenExpiresAt } = await issueAuthTokens(user, req);
     const responseData = {
-      user: {
-        id: user.id,
-        email: user.email,
-        fullName: user.fullName || null,
-        avatar: user.avatar,
-        role: user.role,
-        status: user.status,
-        isEmailVerified: user.isEmailVerified,
-      },
+      user: authSessionUserFields(user),
       token: accessToken,
       isNewUser,
     };
@@ -722,6 +749,10 @@ const getProfile = async (req, res, next) => {
         addressCity: true,
         createdAt: true,
         updatedAt: true,
+        // Auth capability flags only — hashes / provider IDs never leave the server.
+        password: true,
+        googleId: true,
+        appleId: true,
       },
     });
 
@@ -729,13 +760,17 @@ const getProfile = async (req, res, next) => {
       return error(res, 'User not found', 404);
     }
 
+    const { password, googleId, appleId, managedRegions: managedRegionRows, ...rest } = user;
     // Flatten the join rows into id + resolved region lists the frontend can bind to.
     // Empty for admins / all-region managers (they see every region).
-    const managedRegions = (user.managedRegions || []).map((mr) => mr.region).filter(Boolean);
+    const managedRegions = (managedRegionRows || []).map((mr) => mr.region).filter(Boolean);
     const shaped = {
-      ...user,
+      ...rest,
       managedRegions,
       managedRegionIds: managedRegions.map((r) => r.id),
+      hasPassword: !!password,
+      isGoogleUser: !!googleId,
+      isAppleUser: !!appleId,
     };
 
     return success(res, shaped, 'Profile fetched successfully', 200);

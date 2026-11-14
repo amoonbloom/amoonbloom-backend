@@ -25,6 +25,7 @@ const zoneConfigValidation = [
   body('sameDayCutoff').optional({ nullable: true }).matches(/^([01]?\d|2[0-3]):[0-5]\d$/)
     .withMessage('sameDayCutoff must be a 24h time "HH:mm"'),
   body('standardLeadDays').optional({ nullable: true }).isInt({ min: 0, max: 90 }),
+  body('standardLeadDaysMax').optional({ nullable: true }).isInt({ min: 0, max: 90 }),
   body('deliveryDays').optional({ nullable: true }).isArray(),
   body('deliveryDays.*').optional().isInt({ min: 0, max: 6 }),
   body('codEnabled').optional({ nullable: true }).isBoolean(),

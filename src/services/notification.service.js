@@ -58,13 +58,25 @@ async function unreadCount(userId) {
   return prisma.notification.count({ where: { userId, readAt: null } });
 }
 
-/** Mark one notification read (scoped to the owner). Returns affected count. */
+/**
+ * Mark one notification read (scoped to the owner).
+ * Idempotent for the owner: already-read returns { alreadyRead: true }.
+ * Missing / not owned returns { notFound: true }.
+ */
 async function markRead(userId, id) {
+  const owned = await prisma.notification.findFirst({
+    where: { id, userId },
+    select: { id: true, readAt: true },
+  });
+  if (!owned) return { notFound: true, count: 0 };
+
+  if (owned.readAt) return { alreadyRead: true, count: 0 };
+
   const res = await prisma.notification.updateMany({
     where: { id, userId, readAt: null },
     data: { readAt: new Date() },
   });
-  return res.count;
+  return { alreadyRead: false, count: res.count };
 }
 
 /** Mark every unread notification for a user as read. Returns affected count. */

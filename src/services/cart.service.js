@@ -153,8 +153,19 @@ async function addToCart(userId, {
           ...(regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {}),
         },
       },
-      // This region's own coming-soon override row (0-1), for the region-aware guard.
-      ...(regionId ? { regions: { where: { regionId }, select: { comingSoon: true } } } : {}),
+      // This region's own coming-soon + gift-enable override row (0-1).
+      ...(regionId
+        ? {
+            regions: {
+              where: { regionId },
+              select: {
+                comingSoon: true,
+                giftCardEnabled: true,
+                customNameEnabled: true,
+              },
+            },
+          }
+        : {}),
       // Released from the category cascade if curated into a published "sell coming-soon" section.
       sectionProducts: {
         where: { excluded: false, section: { releaseComingSoon: true, status: 'PUBLISHED' } },
@@ -181,24 +192,35 @@ async function addToCart(userId, {
   const qty = Math.max(1, parseInt(quantity, 10) || 1);
   const cart = await getOrCreateCart(userId);
 
+  // Region gift enable: ProductRegion override when non-null, else product global.
+  const regionGift = product.regions?.[0] || null;
+  const giftEnabledHere =
+    regionGift && regionGift.giftCardEnabled != null
+      ? !!regionGift.giftCardEnabled
+      : !!product.giftCardEnabled;
+  const nameEnabledHere =
+    regionGift && regionGift.customNameEnabled != null
+      ? !!regionGift.customNameEnabled
+      : !!product.customNameEnabled;
+
   // Only honor gift-card/custom-name selections the product actually offers — a
   // tampered request claiming an add-on the product doesn't have is silently
   // dropped. Resolved BEFORE the line key because the custom name is part of the
   // line's identity (see lineVariantKey below).
   const effectiveGiftCardSelected =
-    giftCardSelected !== undefined ? !!giftCardSelected && !!product.giftCardEnabled : undefined;
+    giftCardSelected !== undefined ? !!giftCardSelected && giftEnabledHere : undefined;
   // Resolved gift-card input mode (product ?? category ?? MESSAGE) snapshotted onto the
   // line when the card is on, so the cart/order can label it "Gift name" vs "Gift message".
   const resolvedGiftMode = resolveGiftCardMode(product.giftCardMode, product.category?.giftCardMode);
   const effectiveCustomName =
-    customName !== undefined ? (product.customNameEnabled ? (String(customName || '').trim() || null) : null) : undefined;
+    customName !== undefined ? (nameEnabledHere ? (String(customName || '').trim() || null) : null) : undefined;
   // The gift card's personalized message is part of the line identity too, so two
   // units with the SAME card but a DIFFERENT message stay separate lines (per-unit
   // personalization). Folded ONLY for gift-card products — on other products the
   // `message` field is a generic per-line note (e.g. mobile gift-wrap text) whose
   // existing merge behavior must not change, so it stays out of the key there.
   const keyMessage =
-    product.giftCardEnabled ? (String(message == null ? '' : message).trim() || null) : null;
+    giftEnabledHere ? (String(message == null ? '' : message).trim() || null) : null;
   // Per-unit cash arrangement is part of the line identity too, so two units with a
   // different cash amount/denomination/note stay separate lines. undefined = not sent
   // (plain add) → no cash segment; a normalized object → its own line.
@@ -393,6 +415,8 @@ async function getCart(userId, currency = 'AED', regionId = null) {
           discountedPrice: true,
           giftCardExtraPrice: true,
           customNamePrice: true,
+          giftCardEnabled: true,
+          customNameEnabled: true,
         },
       })
     : [];

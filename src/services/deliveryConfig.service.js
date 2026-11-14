@@ -81,6 +81,11 @@ function resolveDeliveryConfig(region, zone, opts = {}) {
   const sameDayEnabled = !!inherit(z.sameDayEnabled, r.sameDayEnabled, false);
   const sameDayCutoff = inherit(z.sameDayCutoff, r.sameDayCutoff, null);
   const standardLeadDays = inherit(z.standardLeadDays, r.standardDeliveryDays, null);
+  // Upper bound of the standard window. Zone max inherits region max when the zone
+  // doesn't set its own; if the winning min came from the zone but max only exists on
+  // the region, still inherit region max only when zone didn't override the min alone
+  // with an explicit null-max (zone max null = inherit).
+  const standardLeadDaysMax = inherit(z.standardLeadDaysMax, r.standardDeliveryDaysMax, null);
   const codEnabled = !!inherit(z.codEnabled, r.codEnabled, true);
   const minOrderAmount = toNum(z.minOrderAmount);
   const maxOrderAmount = toNum(z.maxOrderAmount);
@@ -126,6 +131,13 @@ function resolveDeliveryConfig(region, zone, opts = {}) {
     sameDayEnabled,
     sameDayCutoff,
     standardLeadDays,
+    // null, or > standardLeadDays → app shows "N to M days"; else "within N days".
+    standardLeadDaysMax:
+      standardLeadDays != null &&
+      standardLeadDaysMax != null &&
+      standardLeadDaysMax > standardLeadDays
+        ? standardLeadDaysMax
+        : null,
     codEnabled,
     minOrderAmount,
     maxOrderAmount,

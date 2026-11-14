@@ -66,7 +66,7 @@ async function waitFor(fn, { tries = 30, every = 300 } = {}) {
     check('inbox list returns the notification + unreadCount', list.total === 1 && list.unreadCount === 1);
     const marked = await notificationService.markRead(user.id, notif.id);
     const after = await notificationService.unreadCount(user.id);
-    check('markRead clears unread', marked === 1 && after === 0);
+    check('markRead clears unread', marked.count === 1 && after === 0);
 
     // ---- inline fallback: enqueue while pretending the engine is down ----
     const realReady = queue.isReady();

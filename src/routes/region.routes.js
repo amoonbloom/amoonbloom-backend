@@ -92,6 +92,8 @@ const createValidation = [
     .withMessage('shippingFlatRate must be a non-negative number'),
   body('standardDeliveryDays').optional({ nullable: true }).isInt({ min: 0, max: 90 })
     .withMessage('standardDeliveryDays must be an integer between 0 and 90'),
+  body('standardDeliveryDaysMax').optional({ nullable: true }).isInt({ min: 0, max: 90 })
+    .withMessage('standardDeliveryDaysMax must be an integer between 0 and 90'),
   body('iso2').optional({ nullable: true }).isString().trim().isLength({ min: 2, max: 2 })
     .withMessage('iso2 must be a 2-letter country code (e.g. AE, SA)'),
   body('urlSlug').optional({ nullable: true }).isString().trim().matches(/^[a-z0-9-]+$/)
@@ -117,6 +119,8 @@ const updateValidation = [
     .withMessage('shippingFlatRate must be a non-negative number'),
   body('standardDeliveryDays').optional({ nullable: true }).isInt({ min: 0, max: 90 })
     .withMessage('standardDeliveryDays must be an integer between 0 and 90'),
+  body('standardDeliveryDaysMax').optional({ nullable: true }).isInt({ min: 0, max: 90 })
+    .withMessage('standardDeliveryDaysMax must be an integer between 0 and 90'),
   body('iso2').optional({ nullable: true }).isString().trim().isLength({ min: 2, max: 2 })
     .withMessage('iso2 must be a 2-letter country code (e.g. AE, SA)'),
   body('urlSlug').optional({ nullable: true }).isString().trim().matches(/^[a-z0-9-]+$/)
