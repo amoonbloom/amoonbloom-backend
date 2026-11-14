@@ -39,12 +39,12 @@ model Region {
   // days (e.g. 1 for UAE, 3 for KSA). Null means not configured — the storefront
   // shows no ETA. Snapshotted onto Order.estimatedDeliveryDays at checkout time
   // so a later change here doesn't retroactively alter historical orders.
-  // When `standardDeliveryDaysMax` is also set (and greater), the app shows a RANGE
-  // ("3 to 5 days"); when only this field is set, the app shows a single window
-  // ("within 3 days"). Scheduling / earliest-date math always uses this MIN value.
+  // When standardDeliveryDaysMax is also set, the storefront shows a range
+  // ("around X to Y days") instead of "within X days". Scheduling still uses
+  // standardDeliveryDays as the earliest floor.
   standardDeliveryDays           Int?
   // Optional upper bound for the region's standard delivery window (whole days).
-  // Null = single-value display using standardDeliveryDays only. Must be >= min when set.
+  // Null = single-number ETA ("within N days"). When set, must be >= standardDeliveryDays.
   standardDeliveryDaysMax        Int?
   // IANA timezone the region operates in (e.g. "Asia/Dubai", "Asia/Riyadh"). Drives ALL
   // delivery day-boundary math: same-day cutoff, "today", allowed weekdays, blackout
@@ -66,13 +66,17 @@ model Region {
   // Whether Cash on Delivery is offered in this region. Default true (COD is the only
   // payment method today). Zones may override to disable COD for a specific area.
   codEnabled                     Boolean  @default(true)
-  // Whether online (card / Apple Pay via MyFatoorah) payment is offered in this region.
+  // Whether online (card / Apple Pay) payment is offered in this region.
   // Opt-in per region (default false): the gateway account is currency-scoped (e.g. an
   // AED-only Apple Pay certificate), so only regions whose currency the gateway can charge
-  // should be turned on. When false, checkout/buy-now reject MYFATOORAH and the storefront
-  // hides the online option — Cash on Delivery still works. Replaces the old global
-  // "order currency must equal the gateway currency" gate.
+  // should be turned on. When false, checkout/buy-now reject card online methods and the
+  // storefront hides the online option — Cash on Delivery still works. Replaces the old
+  // global "order currency must equal the gateway currency" gate.
   onlinePaymentEnabled           Boolean  @default(false)
+  // Which card gateway processes online payments when onlinePaymentEnabled is on.
+  // MYFATOORAH = existing hosted page (UAE/default); MOYASAR = KSA mada/Apple Pay via
+  // Moyasar invoices. Admin picks per region — checkout remaps the card method accordingly.
+  onlinePaymentProvider          OnlinePaymentProvider @default(MYFATOORAH)
   // Which online methods are offered when onlinePaymentEnabled is on — set independently
   // per region from the admin panel. Default true so turning online payment on offers both
   // (existing enabled regions keep card + Apple Pay). Apple Pay is enforced server-side on
@@ -272,11 +276,10 @@ model DeliveryZone {
   sameDayCutoff                   String?
   // Standard courier lead time (whole days) for this zone. null = inherit
   // Region.standardDeliveryDays. Distinct from product/category PREP lead days.
-  // When `standardLeadDaysMax` is also set (and greater), the app shows a RANGE;
-  // when only this field is set (or inherited as a single), show "within N days".
+  // When standardLeadDaysMax is also set (or inherited), the storefront shows a range.
   standardLeadDays                Int?
-  // Optional upper bound for this zone's standard window. null = inherit
-  // Region.standardDeliveryDaysMax (or single-value display when that is also null).
+  // Optional upper bound for this zone's standard delivery window. null = inherit
+  // Region.standardDeliveryDaysMax. When set with a min, must be >= the effective min.
   standardLeadDaysMax             Int?
   // Allowed delivery weekdays (0=Sun..6=Sat). [] = inherit the region's deliveryDays.
   deliveryDays                    Int[]    @default([])
@@ -1048,11 +1051,10 @@ model Product {
   @@index([status, sortOrder])
 }
 
-/// Saved wishlist line for a signed-in user OR a guest device.
-/// Guests identify themselves with a durable client UUID (`guestToken`, sent as
-/// `X-Guest-Token`). On signup / sign-in / OAuth the guest lines are claimed into
-/// the user's wishlist (union by productId+variantKey) — same idea as linking
-/// guest orders by email. Exactly one of userId / guestToken is set.
+/// Server-side wishlist row. Guests use guestToken (X-Guest-Token); signed-in users
+/// use userId. On login/signup the guest rows are claimed into the user's wishlist
+/// (union by productId+variantKey) — same idea as linking guest orders by email.
+/// Exactly one of userId / guestToken is set.
 model WishlistItem {
   id              String   @id @default(uuid())
   userId          String?
@@ -1883,6 +1885,12 @@ enum DeliveryType {
 enum PaymentMethod {
   COD
   MYFATOORAH
+  MOYASAR
+}
+
+enum OnlinePaymentProvider {
+  MYFATOORAH
+  MOYASAR
 }
 
 enum PaymentStatus {

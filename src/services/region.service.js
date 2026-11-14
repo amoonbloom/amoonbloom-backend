@@ -40,6 +40,7 @@ const REGION_SELECT = {
   sameDayCutoff: true,
   codEnabled: true,
   onlinePaymentEnabled: true,
+  onlinePaymentProvider: true,
   applePayEnabled: true,
   cardPaymentEnabled: true,
   shortAddressEnabled: true,
@@ -109,6 +110,11 @@ function buildRegionDeliveryConfigPayload(data, { partial = false } = {}) {
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
   set('codEnabled', data.codEnabled != null, parseBool(data.codEnabled, true));
   set('onlinePaymentEnabled', data.onlinePaymentEnabled != null, parseBool(data.onlinePaymentEnabled, false));
+  set(
+    'onlinePaymentProvider',
+    data.onlinePaymentProvider != null && data.onlinePaymentProvider !== '',
+    parseOnlinePaymentProvider(data.onlinePaymentProvider)
+  );
   // applePayEnabled/cardPaymentEnabled are non-nullable columns defaulting to true; on a
   // partial update a stray null means "leave unchanged" (gate on != null), matching the
   // codEnabled/sameDayEnabled convention above.
@@ -124,6 +130,18 @@ function normalizeCode(code) {
   return String(code ?? '').trim().toUpperCase();
 }
 
+/** Card gateway for the region — MyFatoorah (default) or Moyasar (KSA). */
+function parseOnlinePaymentProvider(value) {
+  const v = String(value ?? '')
+    .trim()
+    .toUpperCase();
+  if (v === 'MOYASAR') return 'MOYASAR';
+  if (v === 'MYFATOORAH' || v === '') return 'MYFATOORAH';
+  throw Object.assign(new Error('onlinePaymentProvider must be MYFATOORAH or MOYASAR'), {
+    code: 'VALIDATION',
+  });
+}
+
 /** Blank/null/undefined -> null (no fee configured); otherwise a non-negative number. */
 function parseShippingFlatRate(value) {
   if (value === null || value === undefined || value === '') return null;
@@ -136,33 +154,43 @@ function parseShippingFlatRate(value) {
 
 /** Blank/null/undefined -> null (not configured, no ETA shown); otherwise a
  *  non-negative whole number of days, capped at 90 to reject garbage input. */
-function parseStandardDeliveryDays(value, fieldName = 'standardDeliveryDays') {
+function parseStandardDeliveryDays(value) {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
   if (!Number.isInteger(n) || n < 0 || n > 90) {
-    throw Object.assign(new Error(`${fieldName} must be a whole number between 0 and 90`), { code: 'VALIDATION' });
+    throw Object.assign(new Error('standardDeliveryDays must be a whole number between 0 and 90'), { code: 'VALIDATION' });
   }
   return n;
 }
 
-/** Ensures max >= min when both are set. Returns { min, max } with max normalized
- *  to null when it equals min (single-value display). */
-function normalizeDeliveryDaysRange(min, max) {
-  if (max != null && min == null) {
+/** Same shape as parseStandardDeliveryDays — optional upper bound for the ETA range. */
+function parseStandardDeliveryDaysMax(value) {
+  if (value === null || value === undefined || value === '') return null;
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0 || n > 90) {
     throw Object.assign(
-      new Error('standardDeliveryDaysMax requires standardDeliveryDays (the lower bound)'),
+      new Error('standardDeliveryDaysMax must be a whole number between 0 and 90'),
       { code: 'VALIDATION' }
     );
   }
-  if (min != null && max != null && max < min) {
+  return n;
+}
+
+/** Max is only valid when a min is set, and must be >= min. */
+function assertDeliveryDaysRange(minDays, maxDays) {
+  if (maxDays == null) return;
+  if (minDays == null) {
+    throw Object.assign(
+      new Error('standardDeliveryDaysMax requires standardDeliveryDays to be set'),
+      { code: 'VALIDATION' }
+    );
+  }
+  if (maxDays < minDays) {
     throw Object.assign(
       new Error('standardDeliveryDaysMax must be greater than or equal to standardDeliveryDays'),
       { code: 'VALIDATION' }
     );
   }
-  // max === min → treat as single-value (clear max) so the app shows "within N days".
-  if (min != null && max != null && max === min) return { min, max: null };
-  return { min, max };
 }
 
 /** Blank/null/undefined -> null; otherwise the trimmed string. Shared by every
@@ -387,14 +415,10 @@ async function createRegion(data) {
         legalEntity: trimOrNull(data.legalEntity),
         shippingFlatRate: parseShippingFlatRate(data.shippingFlatRate),
         ...(() => {
-          const range = normalizeDeliveryDaysRange(
-            parseStandardDeliveryDays(data.standardDeliveryDays),
-            parseStandardDeliveryDays(data.standardDeliveryDaysMax, 'standardDeliveryDaysMax')
-          );
-          return {
-            standardDeliveryDays: range.min,
-            standardDeliveryDaysMax: range.max,
-          };
+          const minDays = parseStandardDeliveryDays(data.standardDeliveryDays);
+          const maxDays = parseStandardDeliveryDaysMax(data.standardDeliveryDaysMax);
+          assertDeliveryDaysRange(minDays, maxDays);
+          return { standardDeliveryDays: minDays, standardDeliveryDaysMax: maxDays };
         })(),
         iso2: parseIso2(data.iso2),
         urlSlug: parseUrlSlug(data.urlSlug),
@@ -479,19 +503,22 @@ async function updateRegion(id, data) {
   if (data.shippingFlatRate !== undefined) {
     payload.shippingFlatRate = parseShippingFlatRate(data.shippingFlatRate);
   }
+  if (data.standardDeliveryDays !== undefined) {
+    payload.standardDeliveryDays = parseStandardDeliveryDays(data.standardDeliveryDays);
+  }
+  if (data.standardDeliveryDaysMax !== undefined) {
+    payload.standardDeliveryDaysMax = parseStandardDeliveryDaysMax(data.standardDeliveryDaysMax);
+  }
   if (data.standardDeliveryDays !== undefined || data.standardDeliveryDaysMax !== undefined) {
-    // Partial update: resolve against the current row when only one side is sent.
     const nextMin =
       data.standardDeliveryDays !== undefined
-        ? parseStandardDeliveryDays(data.standardDeliveryDays)
-        : existing.standardDeliveryDays ?? null;
+        ? payload.standardDeliveryDays
+        : existing.standardDeliveryDays;
     const nextMax =
       data.standardDeliveryDaysMax !== undefined
-        ? parseStandardDeliveryDays(data.standardDeliveryDaysMax, 'standardDeliveryDaysMax')
-        : existing.standardDeliveryDaysMax ?? null;
-    const range = normalizeDeliveryDaysRange(nextMin, nextMax);
-    payload.standardDeliveryDays = range.min;
-    payload.standardDeliveryDaysMax = range.max;
+        ? payload.standardDeliveryDaysMax
+        : existing.standardDeliveryDaysMax;
+    assertDeliveryDaysRange(nextMin ?? null, nextMax ?? null);
   }
   if (data.iso2 !== undefined) payload.iso2 = parseIso2(data.iso2);
   if (data.urlSlug !== undefined) payload.urlSlug = parseUrlSlug(data.urlSlug);

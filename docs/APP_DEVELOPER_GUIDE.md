@@ -506,7 +506,7 @@ None found that should break current mobile clients. Prefer live swagger if some
 
 ## Deploy notes (backend / ops)
 
-Run migrations (wishlist + delivery range + per-region gift enable):
+Run migrations (wishlist + per-region gift enable; delivery range + Moyasar may already be applied):
 
 ```bash
 npx prisma migrate deploy
@@ -517,7 +517,7 @@ New / changed surfaces for this release:
 | Area | What |
 |------|------|
 | Wishlist | `/wishlist`, `/wishlist/claim`, auto-claim on auth |
-| Region | `standardDeliveryDaysMax` |
+| Region | `standardDeliveryDaysMax` (ETA range) |
 | Zone | `standardLeadDaysMax` |
 | Products | `resolvedDeliveryLeadDaysMax` |
 | Sale | per-region via `onSaleRegionIds` (storefront `onSale` already region-scoped) |

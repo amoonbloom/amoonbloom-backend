@@ -59,8 +59,23 @@ function buildZoneConfigPayload(data, { partial = false } = {}) {
   set('freeDeliveryThreshold', data.freeDeliveryThreshold !== undefined, parseMoneyOrNull(data.freeDeliveryThreshold, 'freeDeliveryThreshold'));
   set('sameDayEnabled', data.sameDayEnabled !== undefined, parseNullableBool(data.sameDayEnabled));
   set('sameDayCutoff', data.sameDayCutoff !== undefined, parseHHmmOrNull(data.sameDayCutoff, 'sameDayCutoff'));
-  // Lead range is applied after this helper via applyLeadDaysRange() so create/update
-  // can merge partial updates against the current row.
+  set('standardLeadDays', data.standardLeadDays !== undefined, parseWholeDaysOrNull(data.standardLeadDays, 'standardLeadDays'));
+  set('standardLeadDaysMax', data.standardLeadDaysMax !== undefined, parseWholeDaysOrNull(data.standardLeadDaysMax, 'standardLeadDaysMax'));
+  // Zone-local range check when BOTH override fields are present in this payload.
+  // Full min/max (including inherited region values) is enforced in deliveryConfig /
+  // order flows; here we only reject an obviously inverted zone pair.
+  if (
+    Object.prototype.hasOwnProperty.call(payload, 'standardLeadDays') &&
+    Object.prototype.hasOwnProperty.call(payload, 'standardLeadDaysMax') &&
+    payload.standardLeadDays != null &&
+    payload.standardLeadDaysMax != null &&
+    payload.standardLeadDaysMax < payload.standardLeadDays
+  ) {
+    throw Object.assign(
+      new Error('standardLeadDaysMax must be greater than or equal to standardLeadDays'),
+      { code: 'VALIDATION' }
+    );
+  }
   set('deliveryDays', data.deliveryDays !== undefined, parseDeliveryDays(data.deliveryDays));
   set('codEnabled', data.codEnabled !== undefined, parseNullableBool(data.codEnabled));
   const min = parseMoneyOrNull(data.minOrderAmount, 'minOrderAmount');
@@ -92,38 +107,6 @@ function buildZoneConfigPayload(data, { partial = false } = {}) {
     payload.cashArrangementFeeMarginPercent = fee.feeMarginPercent;
   }
   return payload;
-}
-
-/** Apply standardLeadDays + optional standardLeadDaysMax onto a Prisma payload. */
-function applyLeadDaysRange(payload, data, current = null) {
-  if (
-    data.standardLeadDays === undefined &&
-    data.standardLeadDaysMax === undefined &&
-    current
-  ) {
-    return; // partial update, neither field sent
-  }
-  const min =
-    data.standardLeadDays !== undefined
-      ? parseWholeDaysOrNull(data.standardLeadDays, 'standardLeadDays')
-      : current
-        ? current.standardLeadDays ?? null
-        : parseWholeDaysOrNull(data.standardLeadDays, 'standardLeadDays');
-  const max =
-    data.standardLeadDaysMax !== undefined
-      ? parseWholeDaysOrNull(data.standardLeadDaysMax, 'standardLeadDaysMax')
-      : current
-        ? current.standardLeadDaysMax ?? null
-        : parseWholeDaysOrNull(data.standardLeadDaysMax, 'standardLeadDaysMax');
-
-  if (max != null && min == null) {
-    throw Object.assign(new Error('standardLeadDaysMax requires standardLeadDays'), { code: 'VALIDATION' });
-  }
-  if (min != null && max != null && max < min) {
-    throw Object.assign(new Error('standardLeadDaysMax must be >= standardLeadDays'), { code: 'VALIDATION' });
-  }
-  payload.standardLeadDays = min ?? null;
-  payload.standardLeadDaysMax = min != null && max != null && max > min ? max : null;
 }
 
 async function getZoneById(id) {
@@ -187,8 +170,6 @@ async function createZone(data) {
   const name = String(data.name ?? '').trim();
   if (!name) throw Object.assign(new Error('Zone name is required'), { code: 'VALIDATION' });
 
-  const config = buildZoneConfigPayload(data, { partial: false });
-  applyLeadDaysRange(config, data, null);
   return prisma.deliveryZone.create({
     data: {
       regionId,
@@ -197,7 +178,7 @@ async function createZone(data) {
       isActive: data.isActive === undefined ? true : !!data.isActive,
       // sortOrder is automatic (append) unless an explicit value is passed.
       sortOrder: data.sortOrder != null ? Number(data.sortOrder) : await nextSortOrder(regionId),
-      ...config,
+      ...buildZoneConfigPayload(data, { partial: false }),
     },
     select: ZONE_SELECT,
   });
@@ -275,7 +256,6 @@ async function updateZone(id, data) {
   if (data.isActive !== undefined) payload.isActive = !!data.isActive;
   if (data.sortOrder !== undefined) payload.sortOrder = Number(data.sortOrder);
   Object.assign(payload, buildZoneConfigPayload(data, { partial: true }));
-  applyLeadDaysRange(payload, data, existing);
 
   // Re-assert min <= max against the MERGED state (incoming value if sent, else the stored
   // one) — a partial update that only sends one side must not create an impossible bound

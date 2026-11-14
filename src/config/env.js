@@ -54,6 +54,16 @@ const optional = [
   'MYFATOORAH_CURRENCY',
   'MYFATOORAH_TIMEOUT_MS',
   'MYFATOORAH_WEBHOOK_SECRET',
+  // Moyasar (KSA mada / Visa / Mastercard / Apple Pay). Disabled if MOYASAR_SECRET_KEY unset.
+  'MOYASAR_SECRET_KEY',
+  'MOYASAR_PUBLISHABLE_KEY',
+  'MOYASAR_BASE_URL',
+  'MOYASAR_SUCCESS_URL',
+  'MOYASAR_BACK_URL',
+  'MOYASAR_WEBHOOK_SECRET',
+  'MOYASAR_INVOICE_CALLBACK_URL',
+  'MOYASAR_TIMEOUT_MS',
+  'MOYASAR_RECONCILE_MIN_AGE_MIN',
   // Background jobs (pg-boss). The engine runs in-process by default and stores jobs
   // in the existing Postgres (no Redis needed).
   'JOBS_ENABLED', // 'false' fully disables the engine (enqueue runs inline)
