@@ -1,15 +1,36 @@
-# Amoon Bloom — App Developer Guide (single source of truth)
+# Amoon Bloom — App Developer Guide
 
-**Date:** 2026-11-14  
+**Date:** 14 Nov 2026  
 **Audience:** Mobile app developers  
 **Base URL:** `/api/v1`  
-**Repo:** `amoonbloom/amoonbloom-backend`
+**This is the only document you need** for this backend release.
 
-Share **this one file** with the app team. It includes:
+Hi team — please read this end to end before your next app release. It covers everything that shipped, what you must change in the app, sample payloads, and answers to the earlier backend Q&A.
 
-- Everything we **built / fixed** (wishlist, auth flags, address 409, quote promo, notifications, delivery-days range, region sale/gift, …)
-- Answers to **all original backend questions**
-- How the app must show **prices, sale badges, and gift options by region**
+---
+
+## What you must implement (quick list)
+
+1. **Server wishlist** — guests use `X-Guest-Token`; merge into the account on login (same idea as guest orders + email).
+2. **National Address** — show / require short address **only when** `shortAddressEnabled === true` on the region.
+3. **Delivery ETA range** — if max is set and greater than min, show **“N to M days”**; otherwise **“within N days”**.
+4. **Always send `X-Region`** — prices, sale badge, currency, and gift options are all **region-specific**. Trust the top-level fields on each response; do not reuse another region’s cached product payload.
+5. **Sale** — show the sale badge only when `onSale === true` for the current region (`saleLabel` / `saleLabel_ar` for copy).
+6. **Gift card + custom name** — show each option only if that region’s enable flag is true; use that region’s add-on prices.
+7. **Addresses** — 11th address returns **409** (not 500).
+8. **Auth / profile** — use `hasPassword`, `isGoogleUser`, `isAppleUser`.
+9. **Notifications** — mark-read of an already-read item returns **200**.
+10. **Quote** — if a promo is invalid, read `promoError.message` (quote still returns 200).
+11. **Paid online** — treat as paid when `paymentStatus === "PAID"` (not by order status alone).
+
+### Headers (every storefront call that needs them)
+
+| Header | Use |
+|--------|-----|
+| `Authorization: Bearer …` | Logged-in calls |
+| `X-Region: UAE` or `SA` | Catalogue, product, cart, wishlist, quote, checkout |
+| `X-Zone: <English zone name>` | Zone-aware catalogue |
+| `X-Guest-Token: <uuid>` | Guest wishlist + claim on login |
 
 ---
 
@@ -78,6 +99,13 @@ Add is idempotent: already present → **200** `"Already in wishlist"`.
           "title": "Rose Box",
           "price": 280,
           "discountedPrice": 240,
+          "currency": "SAR",
+          "onSale": true,
+          "saleLabel": "Eid Sale",
+          "giftCardEnabled": true,
+          "giftCardExtraPrice": 0,
+          "customNameEnabled": true,
+          "customNamePrice": 20,
           "image": "https://...",
           "resolvedDeliveryLeadDays": 3,
           "resolvedDeliveryLeadDaysMax": 5
@@ -329,7 +357,21 @@ Top-level fields are already merged for that region:
 3. Display / charge using `giftCardExtraPrice` and `customNamePrice` from the same response.  
 4. Cart `lineTotal` and `POST /orders/quote` already use these region values — trust the API totals.
 
-### 5.4 Admin summary (for the admin panel team)
+### 5.4 How to display a product (app rule of thumb)
+
+For the current region response, use **only** these top-level fields:
+
+| Show | From |
+|------|------|
+| List / detail price | `price`, `discountedPrice`, `currency` |
+| Sale badge | `onSale`, `saleLabel`, `saleLabel_ar` |
+| Gift card option | `giftCardEnabled`, `giftCardExtraPrice`, `giftCardMode` |
+| Custom name option | `customNameEnabled`, `customNamePrice` |
+| ETA | `resolvedDeliveryLeadDays`, `resolvedDeliveryLeadDaysMax` |
+
+If the user switches region, **refetch** catalogue / product / cart with the new `X-Region`. Do not keep showing the previous region’s numbers.
+
+### 5.5 Admin summary (admin panel team)
 
 | Feature | How to set “all regions” | How to set per region |
 |---------|--------------------------|------------------------|
@@ -415,7 +457,7 @@ Both supported. Prefer **`X-Zone: <name>`** (or `?zone=`) long-term; `?zoneId=` 
 
 ### ★ 6. Per-region gift/custom prices on products + quote?
 
-Yes. Storefront merges into top-level `giftCardExtraPrice` / `customNamePrice`. Quote uses the same resolvers as cart/checkout.
+Yes. Storefront merges into top-level `giftCardExtraPrice` / `customNamePrice`. Enable flags are also region-merged (`giftCardEnabled` / `customNameEnabled`). Quote uses the same resolvers as cart/checkout.
 
 ### 7. Is cart `lineTotal` the per-line price?
 
@@ -423,7 +465,7 @@ Yes. Storefront merges into top-level `giftCardExtraPrice` / `customNamePrice`. 
 
 ### 8. Admin `regionPrices[]` — lead days, cash fees, sample?
 
-Admin create/update accept and return `deliveryLeadDays`, cash fee fields, `giftCardExtraPrice`, `customNamePrice` per region entry. See product admin payloads in swagger.
+Admin create/update accept and return `deliveryLeadDays`, cash fee fields, `giftCardExtraPrice`, `customNamePrice`, `giftCardEnabled`, `customNameEnabled` per region entry. See product admin payloads in swagger.
 
 ### ★ 9. `pay-session` 402 `paymentUrl`?
 
@@ -467,7 +509,7 @@ Spent/expired → **401** (sign out). Deactivated → **403**. Rate limit → **
 
 ### 19. Malware commit — what / redeploy / secrets?
 
-Obfuscated payload stripped from `address.routes.js` / `api.js`. No app API change. Ops should confirm Railway redeploy + secret rotation.
+Obfuscated payload was stripped from backend files. No app API change. Ops should confirm Railway redeploy + secret rotation.
 
 ### 20. Removed / renamed routes?
 
@@ -486,6 +528,7 @@ None found that should break current mobile clients. Prefer live swagger if some
 - [ ] Sale badge only when `onSale === true` for current region; use `saleLabel` / `saleLabel_ar`  
 - [ ] Gift card UI only if `giftCardEnabled`; custom name only if `customNameEnabled`  
 - [ ] Use region `giftCardExtraPrice` / `customNamePrice` for add-on charges  
+- [ ] On region switch → refetch products/cart (do not reuse old region prices)  
 - [ ] Address create: handle **409** at 10 addresses  
 - [ ] Use `hasPassword` / `isGoogleUser` / `isAppleUser` from login/profile  
 - [ ] Notification mark-read: expect **200** when already read  
@@ -493,7 +536,7 @@ None found that should break current mobile clients. Prefer live swagger if some
 - [ ] Online paid = `paymentStatus === "PAID"`  
 - [ ] Zones: send English `name` in `X-Zone` with matching `X-Region`  
 
-### Headers
+### Headers (repeat)
 
 | Header | When |
 |--------|------|
@@ -504,15 +547,7 @@ None found that should break current mobile clients. Prefer live swagger if some
 
 ---
 
-## Deploy notes (backend / ops)
-
-Run migrations (wishlist + per-region gift enable; delivery range + Moyasar may already be applied):
-
-```bash
-npx prisma migrate deploy
-```
-
-New / changed surfaces for this release:
+## What shipped on the backend (for your awareness)
 
 | Area | What |
 |------|------|
@@ -521,12 +556,12 @@ New / changed surfaces for this release:
 | Zone | `standardLeadDaysMax` |
 | Products | `resolvedDeliveryLeadDaysMax` |
 | Sale | per-region via `onSaleRegionIds` (storefront `onSale` already region-scoped) |
-| Gift options | per-region enable + price (`regionPrices[].giftCardEnabled` / `customNameEnabled` / prices) |
-| Addresses | create limit → 409 |
+| Gift options | per-region enable + price |
+| Addresses | create limit → **409** |
 | Auth / profile | `hasPassword`, `isGoogleUser`, `isAppleUser` |
 | Notifications | mark-read idempotent |
 | Quote | `promoError` |
 
 ---
 
-Questions: reply with the endpoint + sample body/response. This file is the only handoff doc the app team needs for these changes.
+Questions: reply with the endpoint + sample body/response. **This single file is the full handoff** — you do not need any other doc for these changes.
