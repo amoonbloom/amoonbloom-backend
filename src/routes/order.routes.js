@@ -59,7 +59,7 @@ const statusBody = [
  *
  *       **Recipient name & phone** — **do not send them**. The server reads `fullName` and `phone` from the user profile (collected at signup / Google / Apple) and stamps them onto the order's `shippingAddress` snapshot automatically.
  *
- *       **Payment** — `paymentMethod` is optional and defaults to `COD` (Cash on Delivery), which places the order instantly as `PENDING_PAYMENT`.
+ *       **Payment** — `paymentMethod` is optional and defaults to `COD` (Cash on Delivery), which places the order instantly as `PROCESSING`. Online (`MYFATOORAH` / `MOYASAR`) starts as `PENDING_PAYMENT` until paid.
  *
  *       Pass `MYFATOORAH` to pay online (Apple Pay / cards). The order is created as `status: PENDING_PAYMENT` / `paymentStatus: UNPAID` and the cart is **kept**. Next, call **POST /orders/{id}/pay** to get the payment URL. Once payment succeeds the order becomes `PROCESSING` / `PAID` and the cart is cleared.
  *
@@ -799,7 +799,11 @@ router.post('/payment/moyasar/webhook', orderController.moyasarWebhook);
  * /orders/history:
  *   get:
  *     summary: My order history (customer)
- *     description: Paginated list of the authenticated user's orders (newest first). Optional status filter. Use **GET /orders/{id}** for full line items.
+ *     description: |
+ *       Paginated list of the authenticated user's orders (newest first). Optional status filter.
+ *       Each row includes **paymentMethod** and **paymentStatus** (same as admin list) so the app can
+ *       label COD vs unpaid online correctly. Use **GET /orders/{id}** for full line items.
+ *       COD orders are created as **PROCESSING**; online unpaid orders stay **PENDING_PAYMENT**.
  *     tags: [Orders]
  *     security:
  *       - bearerAuth: []

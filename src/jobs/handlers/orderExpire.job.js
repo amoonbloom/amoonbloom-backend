@@ -18,8 +18,9 @@
  *      do. A NULL invoice therefore means MyFatoorah never raised anything: nothing for the
  *      reconciler to rescue, so releasing stock quickly is safe.
  *
- * IMPORTANT: PENDING_PAYMENT is no longer online-only — COD orders start there too. Both passes
- * only ever touch MYFATOORAH orders, or they would auto-cancel legitimate COD orders.
+ * IMPORTANT: only touch online (MYFATOORAH / MOYASAR) orders. COD now starts in
+ * PROCESSING, but keep the paymentMethod filter so any legacy COD still sitting in
+ * PENDING_PAYMENT is never auto-cancelled.
  */
 
 const prisma = require('../../config/db');

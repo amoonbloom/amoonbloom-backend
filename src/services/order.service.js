@@ -411,16 +411,15 @@ async function createOrderCore(userId, params = {}, opts = {}) {
   let resolvedScheduledDeliveryAt = null;
   let isSameDayDelivery = false;
 
-  // Every order — online or COD — is placed immediately as a real, visible
-  // PENDING_PAYMENT order (WooCommerce parity: "Pending payment" is a normal order
-  // list entry, not a hidden state). Online payment: the cart is kept and no "order
-  // placed" push fires yet — confirm*/finalizePaidOrder moves it to PROCESSING once
-  // paid. COD: cart cleared, push sent immediately (unchanged).
+  // Online (MyFatoorah / Moyasar): place as PENDING_PAYMENT — cart kept, no "order
+  // placed" push yet; confirm*/finalizePaidOrder moves to PROCESSING once paid.
+  // COD: place directly as PROCESSING (nothing to pay online — "Pending payment"
+  // confused customers). Cart cleared + push/email fire immediately.
   const isOnlinePayment =
     paymentMethod === 'MYFATOORAH' || paymentMethod === 'MOYASAR';
   let isMyFatoorah = paymentMethod === 'MYFATOORAH';
   let isMoyasar = paymentMethod === 'MOYASAR';
-  const initialStatus = 'PENDING_PAYMENT';
+  const initialStatus = isOnlinePayment ? 'PENDING_PAYMENT' : 'PROCESSING';
 
   // Recipient identity (fullName + phone) is sourced from the user profile so the
   // checkout payload doesn't need to re-collect what we already have from signup.
@@ -1459,7 +1458,12 @@ async function createOrderCore(userId, params = {}, opts = {}) {
     // Push goes to the buyer's registered devices for a signed-in user; a guest
     // gets an inbox row instead (no device to push to) — see notify.orderPlaced.
     const guestEmailForNotify = isGuest ? guestContact?.email || null : null;
-    notify.orderPlaced({ userId: userId || null, guestEmail: guestEmailForNotify, orderId: createdOrderId });
+    notify.orderPlaced({
+      userId: userId || null,
+      guestEmail: guestEmailForNotify,
+      orderId: createdOrderId,
+      status: 'PROCESSING',
+    });
     notify.adminNewOrder({
       orderId: createdOrderId,
       orderNumber: payload.orderNumber,
@@ -2014,8 +2018,8 @@ async function getAllOrdersAdmin(page = 1, limit = 10, status = null, regionId =
     scheduledDeliveryAt: o.scheduledDeliveryAt ?? null,
     estimatedDeliveryDays: o.estimatedDeliveryDays ?? null,
     status: o.status,
-    // Payment method + status so the admin orders list can distinguish a COD
-    // order from a failed online payment at a glance (both sit in PENDING_PAYMENT).
+    // Payment method + status so the admin orders list can distinguish COD
+    // (PROCESSING + UNPAID) from unpaid online (PENDING_PAYMENT + UNPAID).
     paymentMethod: o.paymentMethod ?? 'COD',
     paymentStatus: o.paymentStatus ?? 'UNPAID',
     region: o.region ? { id: o.region.id, code: o.region.code, name: o.region.name } : null,
@@ -2059,6 +2063,10 @@ function mapOrderListRow(order, { includeUser, includeItems, adminAudit }) {
     scheduledDeliveryAt: order.scheduledDeliveryAt ?? null,
     estimatedDeliveryDays: order.estimatedDeliveryDays ?? null,
     status: order.status,
+    // Same fields as admin list / order detail — app history needs these to show
+    // "Order received" for COD vs "Pending payment" for unpaid online.
+    paymentMethod: order.paymentMethod ?? 'COD',
+    paymentStatus: order.paymentStatus ?? 'UNPAID',
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
@@ -2766,9 +2774,9 @@ async function finalizePaidOrder(order, { firstPlacement } = {}) {
   }
 
   // Clear the cart (kept until now) for a normal online checkout. Buy Now orders
-  // (clearCartOnPayment=false) must NOT wipe the user's real cart. Every order starts
-  // PENDING_PAYMENT now (online or COD); this whole function only ever runs for a
-  // just-paid order, so reaching here with status still PENDING_PAYMENT means online.
+  // (clearCartOnPayment=false) must NOT wipe the user's real cart. COD already starts
+  // in PROCESSING; this path only runs for a just-paid online order still in
+  // PENDING_PAYMENT.
   if (order.status === 'PENDING_PAYMENT') {
     if (order.clearCartOnPayment !== false) {
       await prisma.cartItem.deleteMany({ where: { cart: { userId: order.userId } } }).catch((err) =>

@@ -15,7 +15,9 @@ const { QUEUES } = require('../jobs/queues');
  * of `userId`/`guestEmail` should be set — a guest order gets an inbox row
  * (no device to push to) that `linkGuestOrdersToUser` claims on signup/login.
  */
-function orderPlaced({ userId, guestEmail, orderId } = {}) {
+function orderPlaced({ userId, guestEmail, orderId, status = 'PROCESSING' } = {}) {
+  // Called for COD at placement (status PROCESSING) — online paid path uses
+  // orderStatusChange(PROCESSING) instead and skips this to avoid duplicate pushes.
   if (!userId && !guestEmail) return Promise.resolve(null);
   return enqueue(QUEUES.PUSH_SEND, {
     userId: userId || undefined,
@@ -23,7 +25,7 @@ function orderPlaced({ userId, guestEmail, orderId } = {}) {
     prefKey: 'orderStatus',
     type: 'ORDER_PLACED',
     copyKey: 'ORDER_PLACED',
-    data: { type: 'ORDER_PLACED', orderId, status: 'PENDING_PAYMENT' },
+    data: { type: 'ORDER_PLACED', orderId, status },
   });
 }
 

@@ -40,9 +40,14 @@ async function handle(data) {
   // The order's region drives which managers may be alerted. Prefer the value passed
   // in the job data; fall back to reading the order so older enqueues still scope.
   let orderRegionId = data.regionId;
-  if (orderRegionId === undefined) {
-    const ord = await prisma.order.findUnique({ where: { id: orderId }, select: { regionId: true } });
-    orderRegionId = ord?.regionId ?? null;
+  let orderStatus = data.status || null;
+  if (orderRegionId === undefined || !orderStatus) {
+    const ord = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { regionId: true, status: true },
+    });
+    if (orderRegionId === undefined) orderRegionId = ord?.regionId ?? null;
+    if (!orderStatus) orderStatus = ord?.status ?? 'PROCESSING';
   }
 
   // ORDERS managers who may see this region: all-region (no ManagerRegion rows) OR
@@ -76,7 +81,7 @@ async function handle(data) {
       type: 'ORDER_PLACED',
       title,
       body,
-      data: { type: 'ORDER_PLACED', orderId, status: 'PENDING_PAYMENT' },
+      data: { type: 'ORDER_PLACED', orderId, status: orderStatus },
     },
   }));
 

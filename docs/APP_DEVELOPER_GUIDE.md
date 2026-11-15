@@ -22,8 +22,10 @@ Hi team — please read this end to end before your next app release. It covers 
 9. **Notifications** — mark-read of an already-read item returns **200**.
 10. **Quote** — if a promo is invalid, read `promoError.message` (quote still returns 200).
 11. **Paid online** — treat as paid when `paymentStatus === "PAID"` (not by order status alone).
-12. **Order detail screen** — when the user opens an order, show **every** field returned (notes, payment, shipping date, line gifts, cash arrangement, address, totals). See Section 9.
-13. **Order statuses** — support all 8 WooCommerce-style statuses (labels below). Do not use the old Confirmed / Shipped / Delivered set.
+12. **COD** — new COD orders are created as `status: "PROCESSING"` (not `PENDING_PAYMENT`). Do **not** show “Pending payment” for COD.
+13. **History list** — `GET /orders/history` includes `paymentMethod` + `paymentStatus` on each row.
+14. **Order detail screen** — when the user opens an order, show **every** field returned (notes, payment, shipping date, line gifts, cash arrangement, address, totals). See Section 9.
+15. **Order statuses** — support all 8 WooCommerce-style statuses (labels below). Do not use the old Confirmed / Shipped / Delivered set.
 
 ### Headers (every storefront call that needs them)
 
@@ -541,6 +543,8 @@ None found that should break current mobile clients. Prefer live swagger if some
 - [ ] Zones: send English `name` in `X-Zone` with matching `X-Region`  
 - [ ] Order detail (`GET /orders/{id}`): show **all** fields — notes, payment, shipping/ETA, lines, gifts, cash arrangement, address, totals (Section 9)  
 - [ ] Support all **8** order statuses with correct labels + a default/fallback (Section 10)  
+- [ ] COD create → expect `status: "PROCESSING"`; never label new COD as “Pending payment”  
+- [ ] History list uses `paymentMethod` + `paymentStatus` from `GET /orders/history`  
 - [ ] Do not treat `status === PROCESSING` as paid — use `paymentStatus`  
 
 ### Headers (repeat)
@@ -744,8 +748,8 @@ Order lifecycle is WooCommerce-aligned. **`order.status`** uses these API values
 
 | API value (`status`) | Show in the app (EN) | Typical meaning |
 |----------------------|----------------------|-----------------|
-| `PENDING_PAYMENT` | Pending payment | Order placed; waiting for payment (online) or still in early lifecycle (COD also starts here) |
-| `PROCESSING` | Processing | Being prepared / fulfilled (old Confirmed + Processing + Shipped collapsed here) |
+| `PENDING_PAYMENT` | Pending payment | **Online only** at create — waiting for card/Apple Pay. **COD does not use this** anymore. |
+| `PROCESSING` | Processing | Being prepared / fulfilled. **COD starts here** at create. Online moves here after pay. |
 | `ON_HOLD` | On hold | Paused by admin — **must display**, even if the app never sets it |
 | `COMPLETED` | Completed | Done / delivered (replaces old Delivered) |
 | `CANCELLED` | Cancelled | Cancelled |
@@ -762,14 +766,23 @@ Order lifecycle is WooCommerce-aligned. **`order.status`** uses these API values
 | `DELIVERED` | `COMPLETED` |
 | — | `ON_HOLD`, `REFUNDED`, `FAILED`, `DRAFT` (new) |
 
+### Create-time status by payment method
+
+| `paymentMethod` | Initial `status` | Initial `paymentStatus` |
+|-----------------|------------------|-------------------------|
+| `COD` | **`PROCESSING`** | `UNPAID` |
+| `MYFATOORAH` / `MOYASAR` | `PENDING_PAYMENT` | `UNPAID` → `PAID` when gateway confirms |
+
 ### App rules
 
 1. Update every `switch` / stepper / filter / push deep-link that matches status strings.  
 2. Always include a **default / fallback** so unknown values don’t crash.  
-3. Progress UI (if any) should be roughly: **Pending payment → Processing → Completed** (other statuses are labels, not steps).  
+3. Progress UI (if any): online **Pending payment → Processing → Completed**; COD often starts at **Processing**.  
 4. Do **not** treat `PROCESSING` as “paid”. Paid = `paymentStatus === "PAID"`.  
-5. History filters (`?status=`) must send the new enum values only — old names return **400**.  
-6. Push / inbox payloads use the same `status` strings — map them with the table above.
+5. Do **not** show “Pending payment” for COD (new orders are already `PROCESSING`).  
+6. History filters (`?status=`) must send the new enum values only — old names return **400**.  
+7. `GET /orders/history` rows include `paymentMethod` + `paymentStatus` — use them for list labels.  
+8. Push / inbox: COD `ORDER_PLACED` carries `status: "PROCESSING"`.
 
 ### Payment status (separate field)
 
@@ -795,7 +808,7 @@ Order lifecycle is WooCommerce-aligned. **`order.status`** uses these API values
 | Auth / profile | `hasPassword`, `isGoogleUser`, `isAppleUser` |
 | Notifications | mark-read idempotent |
 | Quote | `promoError` |
-| Orders | Full detail payload via `GET /orders/{id}`; 8 WooCommerce statuses |
+| Orders | Full detail via `GET /orders/{id}`; 8 statuses; COD → `PROCESSING` at create; history includes `paymentMethod` / `paymentStatus` |
 
 ---
 
