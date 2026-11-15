@@ -205,14 +205,20 @@ router.post(
  * /orders/quote:
  *   post:
  *     summary: Price a cart WITHOUT creating an order (totals preview)
- *     description: >
- *       Returns the exact money breakdown checkout would charge — item subtotal, promo discount,
- *       zone-accurate delivery fee, and VAT — computed with the SAME helpers as checkout, WITHOUT
- *       creating an order. Works for signed-in users (falls back to their server cart when `items`
- *       is omitted) and guests. Pass `addressId` (or `shippingAddress.deliveryZoneId`) so the
- *       delivery zone resolves the correct fee. An invalid/expired `promoCode` does **not** fail
- *       the quote (discount stays 0); instead `promoError: { code, message }` is returned with the
- *       same PROMO_* codes checkout would use. Cash arrangement is excluded (per-line add-on).
+ *     description: |
+ *       Returns the money breakdown checkout would charge — item subtotal, promo discount,
+ *       zone-accurate delivery fee, VAT, and **cash arrangement** — with the SAME helpers as
+ *       checkout, WITHOUT creating an order.
+ *
+ *       - **Signed-in:** omit `items` to price the server cart (incl. per-line cash on cart rows).
+ *       - **Guests:** send `items[]` including optional `cashArrangement: { cashAmount, denomination?, note? }`.
+ *
+ *       `totalAmount` remains merchandise (+VAT) + shipping (backward compatible).
+ *       **`payableTotalAmount`** is what the order / Apple Pay sheet will charge
+ *       (`totalAmount` + raw cash + cash fee incl. fee VAT when exclusive).
+ *
+ *       An invalid/expired `promoCode` does **not** fail the quote (discount stays 0); instead
+ *       `promoError: { code, message }` is returned.
  *     tags: [Orders]
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
@@ -231,17 +237,31 @@ router.post(
  *                     selectedOptions: { type: object, nullable: true }
  *                     giftCardSelected: { type: boolean }
  *                     customName: { type: string, nullable: true }
+ *                     cashArrangement:
+ *                       type: object
+ *                       nullable: true
+ *                       properties:
+ *                         cashAmount: { type: number, exclusiveMinimum: 0 }
+ *                         denomination: { type: integer, exclusiveMinimum: 0, nullable: true }
+ *                         note: { type: string, maxLength: 500, nullable: true }
  *               addressId: { type: string, format: uuid, nullable: true }
  *               promoCode: { type: string, nullable: true }
  *     responses:
  *       200:
- *         description: "{ subtotalAmount, discountAmount, shippingAmount, taxAmount, vatRatePercent, vatInclusive, totalAmount, currency, appliedPromoCode, promoError, freeDeliveryThreshold, minOrderAmount, maxOrderAmount, deliveryZoneName }"
+ *         description: |
+ *           Quote with totalAmount (legacy, no cash) + cash fields + payableTotalAmount
+ *           (full checkout charge). Also: subtotalAmount, discountAmount, shippingAmount,
+ *           taxAmount, vatRatePercent, vatInclusive, currency, promoError, delivery context.
  */
 router.post(
   '/quote',
   optionalAuth,
   [
     body('items').optional().isArray().withMessage('items must be an array'),
+    body('items.*.cashArrangement').optional({ nullable: true }).isObject().withMessage('cashArrangement must be an object'),
+    body('items.*.cashArrangement.cashAmount').optional({ nullable: true }).isFloat({ gt: 0 }).withMessage('cashArrangement.cashAmount must be a positive number'),
+    body('items.*.cashArrangement.denomination').optional({ nullable: true }).isInt({ gt: 0 }).withMessage('cashArrangement.denomination must be a positive whole number'),
+    body('items.*.cashArrangement.note').optional({ nullable: true }).trim().isLength({ max: 500 }).withMessage('cashArrangement.note must be 500 characters or fewer'),
     body('addressId').optional({ checkFalsy: true }).isUUID().withMessage('addressId must be a valid id'),
     body('promoCode').optional({ nullable: true }).isString().trim(),
   ],

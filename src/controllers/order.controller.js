@@ -771,9 +771,9 @@ async function moyasarWebhook(req, res) {
 }
 
 // POST /orders/quote — price a cart WITHOUT creating an order (totals preview: item subtotal +
-// promo discount + zone-accurate delivery + VAT). optionalAuth: works for signed-in users
-// (falls back to their server cart when `items` is omitted) and guests. Lets the bag/checkout
-// screens show the exact amount before committing (and is a prerequisite for COD).
+// promo discount + zone-accurate delivery + VAT + cash arrangement). optionalAuth: works for
+// signed-in users (falls back to their server cart when `items` is omitted) and guests.
+// Use `payableTotalAmount` for the amount checkout / Apple Pay will charge.
 async function quote(req, res, next) {
   try {
     const result = await orderService.quoteOrder(req.userId ?? null, req.body || {}, {

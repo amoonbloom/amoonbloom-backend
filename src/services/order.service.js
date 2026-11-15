@@ -2936,6 +2936,49 @@ async function confirmOrderPayment(key, keyType = 'PaymentId', regionCode = null
 }
 
 /**
+ * Normalize a per-line cash arrangement for quote/checkout.
+ * Accepts either nested `{ cashAmount, denomination?, note? }` or flat cart columns
+ * (`cashArrangementAmount` / `cashArrangementDenomination` / `cashArrangementNote`).
+ * Returns null when no positive cash amount is present.
+ */
+function normalizeQuoteCashArrangement(it) {
+  if (!it || typeof it !== 'object') return null;
+  const nested = it.cashArrangement && typeof it.cashArrangement === 'object' ? it.cashArrangement : null;
+  const rawAmt =
+    nested && nested.cashAmount != null
+      ? nested.cashAmount
+      : it.cashArrangementAmount != null
+        ? it.cashArrangementAmount
+        : null;
+  if (rawAmt == null || rawAmt === '') return null;
+  const amt = Number(rawAmt);
+  if (!Number.isFinite(amt) || amt <= 0 || amt >= 100_000_000) return null;
+  let denomination = null;
+  const rawDenom =
+    nested && nested.denomination != null
+      ? nested.denomination
+      : it.cashArrangementDenomination != null
+        ? it.cashArrangementDenomination
+        : null;
+  if (rawDenom != null && rawDenom !== '') {
+    const d = Number(rawDenom);
+    if (Number.isInteger(d) && d > 0) denomination = d;
+  }
+  const rawNote =
+    nested && nested.note != null
+      ? nested.note
+      : it.cashArrangementNote != null
+        ? it.cashArrangementNote
+        : null;
+  const note = trimOrNullStr(rawNote);
+  return {
+    cashAmount: round2(amt),
+    denomination,
+    note: note && note.length > 500 ? note.slice(0, 500) : note,
+  };
+}
+
+/**
  * Normalize incoming quote line items into the shape the pricing helpers expect.
  * Drops anything without a productId or a positive integer quantity.
  */
@@ -2953,6 +2996,7 @@ function normalizeQuoteItems(items) {
         selectedOptions: it.selectedOptions ?? null,
         giftCardSelected: !!it.giftCardSelected,
         customName: it.customName ?? null,
+        cashArrangement: normalizeQuoteCashArrangement(it),
       };
     })
     .filter(Boolean);
@@ -2968,6 +3012,9 @@ async function loadCartItemsForQuote(userId) {
       selectedOptions: true,
       giftCardSelected: true,
       customName: true,
+      cashArrangementAmount: true,
+      cashArrangementDenomination: true,
+      cashArrangementNote: true,
     },
   });
   return normalizeQuoteItems(rows);
@@ -2990,16 +3037,18 @@ async function resolveQuoteZoneId({ addressId, shippingAddress, userId }) {
 }
 
 /**
- * Price an order WITHOUT creating it — returns the exact money breakdown checkout would charge
- * (item subtotal, promo discount, zone-accurate delivery, VAT), so the app can show the real
- * total before the customer commits (and for COD, where there is no payment sheet to reveal it).
+ * Price an order WITHOUT creating it — returns the money breakdown checkout would charge
+ * (item subtotal, promo discount, zone-accurate delivery, VAT, and cash arrangement).
  *
  * Reuses the SAME building blocks as createOrderCore — product pricing
  * (productService.resolveEffectivePrice/optionExtraCharge), promo
- * (promoCodeService.validateAndCalculate), VAT (vatService.computeOrderVat), and delivery
- * (resolveDeliveryConfig) — and the SAME final shipping/VAT/total arithmetic (kept in sync with
- * the totals block in createOrderCore). Cash arrangement is intentionally excluded: it's a
- * per-line add-on chosen on the product page, not part of a cart-level quote.
+ * (promoCodeService.validateAndCalculate), VAT (vatService.computeOrderVat), delivery
+ * (resolveDeliveryConfig), and cash arrangement (cashArrangementService.resolveForLines +
+ * computeCashArrangementFee + fee VAT).
+ *
+ * `totalAmount` stays merchandise + shipping (+ merchandise VAT) for backward compatibility
+ * with clients that already display it. `payableTotalAmount` is what checkout would charge
+ * (totalAmount + raw cash + cash fee including fee VAT when exclusive).
  *
  * Never throws for a bad promo — an invalid/expired code in a preview simply yields no discount.
  *
@@ -3125,9 +3174,9 @@ async function quoteOrder(userId, input = {}, opts = {}) {
   const vat = vatService.computeOrderVat(vatLines, discount, vatConfig);
   discount = vat.discountAmount;
 
-  // 7) Shipping (FLAT, VAT-INCLUSIVE) + total — MUST stay in sync with the totals block in
-  //    createOrderCore (order.service.js). The delivery fee is the final amount charged: VAT is
-  //    never added on top and never broken out of it. Cash arrangement excluded (see fn doc).
+  // 7) Shipping (FLAT, VAT-INCLUSIVE) — MUST stay in sync with createOrderCore.
+  //    Cash is NOT part of netForDelivery (same as checkout: free-delivery / min / max
+  //    gates use merchandise net only).
   const netForDelivery = round2(Math.max(0, Number(vat.subtotal) - Number(discount)));
   const freeDeliveryApplies =
     deliveryConfig.freeDeliveryThreshold != null && netForDelivery >= deliveryConfig.freeDeliveryThreshold;
@@ -3139,7 +3188,94 @@ async function quoteOrder(userId, input = {}, opts = {}) {
   const vatIsInclusive = Boolean(vatConfig && vatConfig.inclusive);
 
   const taxAmount = round2(vat.vatAmount);
+  // Backward-compatible: merchandise (+VAT) + shipping only — no cash.
   const totalAmount = round2(vat.total + shippingAmount);
+
+  // 8) Cash arrangement — same helpers / rounding as createOrderCore.
+  //    Raw cash: never taxed, never promo-discounted.
+  //    Fee: taxed via computeOrderVat (exclusive adds VAT; inclusive extracts only).
+  const perLineCash = items.map((it) => it.cashArrangement || null);
+  const anyCashRequested = perLineCash.some((c) => c && c.cashAmount > 0);
+
+  let cashArrangementAmount = null;
+  let cashArrangementFeeAmount = null;
+  let cashArrangementFeeVatAmount = null;
+  let cashArrangementDenomination = null;
+  let cashArrangementNote = null;
+  let cashArrangementFeeCharged = 0;
+
+  if (anyCashRequested) {
+    const cartLinesForCash = items.map((it) => {
+      const p = productById.get(it.productId);
+      return { productId: it.productId, categoryId: p?.categoryId ?? null };
+    });
+    const orderZoneId = orderZone?.id ?? null;
+    const resolvedLines = await cashArrangementService.resolveForLines(
+      { regionId: orderRegionId, zoneId: orderZoneId, cartLines: cartLinesForCash },
+      prisma
+    );
+
+    let sumCash = 0;
+    let sumFee = 0;
+    let sumFeeVat = 0;
+    const cashLinesRequested = [];
+
+    for (let i = 0; i < perLineCash.length; i++) {
+      const cash = perLineCash[i];
+      if (!cash) continue;
+      const rl = resolvedLines.lines[i];
+      if (!rl || !rl.eligible) {
+        return {
+          ok: false,
+          error: 'Cash arrangement is not available for one of the items in your cart.',
+          code: 'CASH_ARRANGEMENT_NOT_ELIGIBLE',
+        };
+      }
+      if (cash.denomination != null && !resolvedLines.denominations.includes(cash.denomination)) {
+        return {
+          ok: false,
+          error: 'Selected banknote denomination is no longer offered for this region.',
+          code: 'CASH_ARRANGEMENT_INVALID_DENOMINATION',
+        };
+      }
+
+      const feePerUnit = computeCashArrangementFee(cash.cashAmount, {
+        feeStepAmount: rl.feeStepAmount,
+        feeMarginPercent: rl.feeMarginPercent,
+      });
+      const feeVat = vatService.computeOrderVat(
+        [
+          {
+            productId: rl.governingProductId,
+            categoryId: rl.governingCategoryId,
+            quantity: 1,
+            unitPrice: feePerUnit,
+          },
+        ],
+        0,
+        vatConfig
+      );
+      const qty = items[i].quantity;
+      sumCash = round2(sumCash + cash.cashAmount * qty);
+      sumFee = round2(sumFee + feePerUnit * qty);
+      sumFeeVat = round2(sumFeeVat + feeVat.vatAmount * qty);
+      cashArrangementFeeCharged = round2(cashArrangementFeeCharged + feeVat.total * qty);
+      cashLinesRequested.push(cash);
+    }
+
+    cashArrangementAmount = sumCash;
+    cashArrangementFeeAmount = sumFee;
+    cashArrangementFeeVatAmount = sumFeeVat;
+    if (cashLinesRequested.length === 1) {
+      cashArrangementDenomination = cashLinesRequested[0].denomination;
+      cashArrangementNote = cashLinesRequested[0].note;
+    }
+  }
+
+  // What checkout would charge (identical formula to createOrderCore finalTotal).
+  const payableTotalAmount = round2(
+    totalAmount + (cashArrangementAmount || 0) + cashArrangementFeeCharged
+  );
 
   return {
     ok: true,
@@ -3152,7 +3288,17 @@ async function quoteOrder(userId, input = {}, opts = {}) {
       // it isn't added on top) so the app can label the VAT line correctly.
       vatRatePercent: vatRate > 0 ? vatRate : null,
       vatInclusive: vatRate > 0 ? vatIsInclusive : false,
+      // Legacy: merchandise (+VAT) + shipping only (no cash). Prefer payableTotalAmount for UI.
       totalAmount,
+      // Cash arrangement roll-up (null when none). Same field names as the order payload.
+      cashArrangementRequested: anyCashRequested,
+      cashArrangementAmount,
+      cashArrangementFeeAmount,
+      cashArrangementFeeVatAmount,
+      cashArrangementDenomination,
+      cashArrangementNote,
+      // Amount an order created from this cart would charge (== order.totalAmount).
+      payableTotalAmount,
       currency,
       appliedPromoCode,
       // null when no promo was sent or it applied successfully; otherwise the same
